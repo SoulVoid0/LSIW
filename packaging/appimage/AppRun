@@ -17,7 +17,18 @@ HERE=$(dirname "$(readlink -f "$0")")
 APPDIR=${APPDIR:-$HERE}
 export APPDIR
 
-gui() { exec "$APPDIR/usr/bin/lsiw-control" "$@"; }
+gui() {
+    # LSIW Control and its bundled GTK need a recent C library; lsiw
+    # itself runs on older systems too.
+    need=$(cat "$APPDIR/usr/share/doc/lsiw/gui-glibc" 2>/dev/null || echo 2.17)
+    have=$(getconf GNU_LIBC_VERSION 2>/dev/null | sed 's/^glibc //')
+    if [ -n "$have" ] && [ "$(printf '%s\n%s\n' "$need" "$have" | sort -t. -k1,1n -k2,2n | head -n 1)" != "$need" ]; then
+        echo "LSIW Control needs glibc $need or newer; this system has $have." >&2
+        echo "The lsiw command works here: run this AppImage with arguments (--help)." >&2
+        exit 1
+    fi
+    exec "$APPDIR/usr/bin/lsiw-control" "$@"
+}
 cli() { exec "$APPDIR/usr/bin/lsiw" "$@"; }
 
 case $(basename "${ARGV0:-$0}") in

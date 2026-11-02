@@ -111,7 +111,7 @@ jobs:
           cp "$RUNNER_TEMP"/cli/out/lsiw_*.deb build/deb/lsiw-control_*.deb dist/
           cp build/appimage/LSIW-$VERSION-x86_64.AppImage dist/
           # AppImageUpdate reads this (the AppImage names it in its update information).
-          cp build/appimage/LSIW-$VERSION-x86_64.AppImage.zsync dist/ 2>/dev/null || true
+          find build -maxdepth 2 -name "LSIW-$VERSION-x86_64.AppImage.zsync" -exec cp {} dist/ \;
           make dist && cp lsiw-$VERSION.tar.gz dist/
           cp install.sh dist/
           (cd dist && sha256sum -- * > SHA256SUMS && cat SHA256SUMS)
