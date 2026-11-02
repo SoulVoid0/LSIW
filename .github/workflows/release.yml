@@ -1,0 +1,164 @@
+# Build the release packages of a tag (v1.2.3) and publish them as a GitHub
+# release: .rpm (Fedora, RHEL, openSUSE), .deb (Debian, Ubuntu) and an
+# AppImage (every other distribution), with install.sh and SHA256SUMS.
+# SPDX-License-Identifier: AGPL-3.0-or-later
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag to build and publish (for example v1.7.1)
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  TAG: ${{ inputs.tag || github.ref_name }}
+
+jobs:
+  # `lsiw` itself, built on an old C library (glibc 2.31) so the .deb and
+  # the AppImage's command run on Debian 11 / Ubuntu 20.04 and newer.
+  cli:
+    name: lsiw on Ubuntu 20.04
+    runs-on: ubuntu-latest
+    container: ubuntu:20.04
+    steps:
+      - name: Install build dependencies
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y gcc make dpkg-dev binutils git ca-certificates
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      - name: Build lsiw
+        run: |
+          make -j"$(nproc)" GUI=no
+          ./lsiw --version
+
+      - name: Build lsiw .deb
+        run: |
+          make install DESTDIR="$PWD/stage" PREFIX=/usr LIBEXECDIR=/usr/libexec SYSCONFDIR=/etc GUI=no
+          SOURCE_DATE_EPOCH=$(git log -1 --format=%ct 2>/dev/null || date +%s) \
+            sh packaging/deb/mkdeb.sh stage "$(grep -m1 'define LSIW_VERSION' include/lsiw.h | cut -d'"' -f2)" out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cli
+          path: |
+            lsiw
+            out/*.deb
+
+  packages:
+    name: rpm, lsiw-control .deb, AppImage
+    needs: cli
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc make pkg-config libgtk-4-dev rpm dpkg-dev \
+            desktop-file-utils appstream-util file binutils curl \
+            libglib2.0-bin librsvg2-common
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: cli
+          path: cli
+
+      - name: Check the version
+        run: |
+          v=$(grep -m1 'define LSIW_VERSION' include/lsiw.h | cut -d'"' -f2)
+          [ "v$v" = "$TAG" ] || { echo "tag $TAG does not match LSIW_VERSION $v" >&2; exit 1; }
+          echo "VERSION=$v" >> "$GITHUB_ENV"
+
+      - name: Build the RPMs
+        run: make rpm RPMBUILD="rpmbuild --nodeps" GUI=yes
+
+      - name: Build lsiw-control .deb
+        run: make deb GUI=yes
+
+      - name: Build the AppImage
+        run: |
+          make all GUI=yes
+          rm -rf build/appimage-stage
+          make install DESTDIR="$PWD/build/appimage-stage" PREFIX=/usr LIBEXECDIR=/usr/libexec SYSCONFDIR=/etc GUI=yes
+          # The command from the glibc 2.31 build, so it runs on old systems too.
+          install -m 0755 cli/lsiw build/appimage-stage/usr/bin/lsiw
+          sh packaging/appimage/mkappimage.sh build/appimage-stage "$VERSION" build/appimage
+
+      - name: Smoke test
+        run: |
+          chmod +x build/appimage/*.AppImage
+          APPIMAGE_EXTRACT_AND_RUN=1 build/appimage/LSIW-$VERSION-x86_64.AppImage --version
+          sudo apt-get install -y ./cli/out/lsiw_*.deb ./build/deb/lsiw-control_*.deb
+          lsiw --version
+
+      - name: Collect the release files
+        run: |
+          mkdir dist
+          cp build/rpmbuild/RPMS/x86_64/lsiw-$VERSION-*.x86_64.rpm \
+             build/rpmbuild/RPMS/x86_64/lsiw-control-$VERSION-*.x86_64.rpm \
+             build/rpmbuild/SRPMS/lsiw-$VERSION-*.src.rpm dist/
+          rm -f dist/*debug*
+          cp cli/out/lsiw_*.deb build/deb/lsiw-control_*.deb dist/
+          cp build/appimage/LSIW-$VERSION-x86_64.AppImage dist/
+          make dist && cp lsiw-$VERSION.tar.gz dist/
+          cp install.sh dist/
+          (cd dist && sha256sum -- * > SHA256SUMS && cat SHA256SUMS)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release
+          path: dist/*
+
+  publish:
+    name: Publish the release
+    needs: packages
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release
+          path: dist
+
+      - name: Create or update the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          v=${TAG#v}
+          cat > notes.md <<EOF
+          LSIW $v for every x86-64 Linux distribution.
+
+          | Format | For | Files |
+          |---|---|---|
+          | .rpm | Fedora, RHEL/Alma/Rocky, openSUSE | lsiw-$v-1.x86_64.rpm, lsiw-control-$v-1.x86_64.rpm (source: lsiw-$v-1.src.rpm) |
+          | .deb | Debian, Ubuntu, Mint, Pop!_OS | lsiw_$v-1_amd64.deb, lsiw-control_$v-1_amd64.deb |
+          | AppImage | any distribution | LSIW-$v-x86_64.AppImage |
+
+          Quick install (picks the right format):
+
+              curl -fLO https://github.com/$GH_REPO/releases/download/$TAG/install.sh
+              sh install.sh
+
+          See the README for per-format instructions and CHANGELOG.md for what changed.
+          Checksums: SHA256SUMS.
+          EOF
+          sed -i 's/^          //' notes.md
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber
+          else
+            gh release create "$TAG" dist/* --title "LSIW ${TAG#v}" --notes-file notes.md --verify-tag
+          fi
