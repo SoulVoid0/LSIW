@@ -1,0 +1,8 @@
+; Import library for the few kernel32.dll functions msvc_eh.exe uses.
+; SPDX-License-Identifier: AGPL-3.0-or-later
+LIBRARY kernel32.dll
+EXPORTS
+    ExitProcess
+    GetStdHandle
+    WriteFile
+    GetCommandLineA

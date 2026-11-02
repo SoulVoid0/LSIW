@@ -1,0 +1,6 @@
+; Import library for the Universal CRT heap functions (api set -> ucrtbase).
+; SPDX-License-Identifier: AGPL-3.0-or-later
+LIBRARY api-ms-win-crt-heap-l1-1-0.dll
+EXPORTS
+    malloc
+    free

@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Version=1.5
+Name=LSIW Control
+GenericName=Windows Program Settings
+Comment=Choose where Windows folders live on Linux and how Windows programs run
+Icon=lsiw
+TryExec=lsiw-control
+Exec=lsiw-control
+Terminal=false
+StartupNotify=true
+StartupWMClass=io.github.lsiw.Control
+Categories=GTK;Settings;
+Keywords=Windows;exe;Wine;AppData;Program Files;folders;drive;compatibility;

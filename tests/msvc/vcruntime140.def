@@ -1,0 +1,23 @@
+; Import library for LSIW's vcruntime140.dll (MSVC C++ runtime support).
+; SPDX-License-Identifier: AGPL-3.0-or-later
+LIBRARY vcruntime140.dll
+EXPORTS
+    __CxxFrameHandler3
+    _CxxThrowException
+    __std_terminate
+    __std_type_info_name
+    __std_type_info_compare
+    __std_exception_copy
+    __std_exception_destroy
+    __RTDynamicCast
+    __RTCastToVoid
+    __RTtypeid
+    __C_specific_handler
+    __current_exception
+    __current_exception_context
+    __type_info_root_node DATA
+    ??1type_info@@UEAA@XZ
+    memcpy
+    memmove
+    memset
+    memcmp

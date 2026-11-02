@@ -1,0 +1,150 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Copyright 2026 The LSIW contributors. SPDX-License-Identifier: AGPL-3.0-or-later -->
+<component type="desktop-application">
+  <id>io.github.lsiw.Control</id>
+  <metadata_license>MIT</metadata_license>
+  <project_license>AGPL-3.0-or-later</project_license>
+  <name>LSIW Control</name>
+  <summary>Configure how Windows programs run on Linux</summary>
+  <developer id="io.github.lsiw">
+    <name>The LSIW contributors</name>
+  </developer>
+  <description>
+    <p>
+      LSIW (Linux Subsystem for Improved Wine) runs Windows x86-64 programs
+      on Linux with its own engine: its own loader for Windows executables and
+      its own implementations of the Windows system libraries. Wine is used
+      only as a fallback for programs the engine cannot run yet.
+    </p>
+    <p>
+      LSIW Control is its settings app. With it you can:
+    </p>
+    <ul>
+      <li>Choose where each Windows folder lives on Linux: Documents, AppData,
+        Program Files, the Windows folder, Temp and every other folder
+        variable Windows migration tools recognise</li>
+      <li>See the Windows path programs use for each folder: the whole Linux
+        file system is the C: drive, and other disks appear as folders on it
+        instead of new drive letters</li>
+      <li>Pick the engine that runs Windows programs: LSIW's own, Wine, or an
+        automatic choice per program</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">lsiw-control.desktop</launchable>
+  <url type="homepage">https://github.com/lsiw/lsiw</url>
+  <url type="bugtracker">https://github.com/lsiw/lsiw/issues</url>
+  <categories>
+    <category>Settings</category>
+    <category>System</category>
+  </categories>
+  <keywords>
+    <keyword>Windows</keyword>
+    <keyword>exe</keyword>
+    <keyword>Wine</keyword>
+    <keyword>compatibility</keyword>
+  </keywords>
+  <provides>
+    <binary>lsiw-control</binary>
+    <binary>lsiw</binary>
+  </provides>
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+  </supports>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="1.7.1" date="2026-11-02">
+      <description>
+        <p>The C: drive is the hidden folder ~/.cdrive by default. An existing ~/c_drive moves
+        there once and ~/c_drive becomes a link to it, so prefixes and shortcuts keep working.</p>
+      </description>
+    </release>
+    <release version="1.7.0" date="2026-11-02">
+      <description>
+        <p>LSIW shortcuts (.lwlnk): a Desktop shortcut button on the Programs page makes a file
+        that starts the program with its settings when double-clicked, and shows the program's
+        icon in file managers. Programs can have an icon of their own.</p>
+      </description>
+    </release>
+    <release version="1.6.0" date="2026-11-01">
+      <description>
+        <p>One shared prefix for every program and game under Wine and Proton, Steam games
+        included; a C: drive folder you choose; a library of programs with their own engine,
+        prefix, DXVK, VKD3D, arguments, environment, MangoHud and shortcuts; and a custom
+        default engine with up to three fallbacks.</p>
+      </description>
+    </release>
+    <release version="1.5.1" date="2026-10-26">
+      <description>
+        <p>LSIW checks the Wine prefix before each program and installs .NET
+          (Wine Mono) or Wine's services when they are missing, so installers
+          such as Discord's work even when the first download failed.</p>
+      </description>
+    </release>
+    <release version="1.5.0" date="2026-10-21">
+      <description>
+        <p>Windows shortcuts (.lnk) open with LSIW, and the Create New menu
+          has "Link to Windows Application...". The Wine prefix now has
+          Wine's Windows services and .NET (Wine Mono), so more installers
+          work.</p>
+      </description>
+    </release>
+    <release version="1.4.2" date="2026-10-21">
+      <description>
+        <p>Setting up the Wine prefix no longer fails with a crash of
+          wine-preloader: Wine 11.20 is skipped, and a Wine build that
+          crashes is replaced by the release before it.</p>
+      </description>
+    </release>
+    <release version="1.4.1" date="2026-10-21">
+      <description>
+        <p>The Proton list on the Engine page shows LSIW's version of every
+          Proton. Setting up the Wine prefix works without 32-bit
+          libraries.</p>
+      </description>
+    </release>
+    <release version="1.4.0" date="2026-10-21">
+      <description>
+        <p>Download Proton-CachyOS, DW-Proton, Proton-GE RTSP, Proton-Tkg,
+          Proton-EM and Proton-Wineland from the Download Proton menu. Each
+          one, and Proton 3.7 to 6.3, Hotfix and Proton Next, gets an LSIW
+          twin in Steam.</p>
+      </description>
+    </release>
+    <release version="1.3.0" date="2026-10-20">
+      <description>
+        <p>Windows folders default to your home folder: ~/Windows,
+          ~/Program Files, ~/ProgramData, and your profile is your home
+          folder. Old locations are moved once.</p>
+      </description>
+    </release>
+    <release version="1.2.1" date="2026-10-20">
+      <description>
+        <p>The window can be made small: pages scroll and wrap. Downloaded
+          Wine builds are named x86_64.</p>
+      </description>
+    </release>
+    <release version="1.2.0" date="2026-10-20">
+      <description>
+        <p>Every Proton in Steam's list, including Valve's versions that are
+          not installed yet, gets an LSIW twin (LSIW Proton Stable, LSIW
+          Proton Experimental, LSIW Proton 11.0-2, ...). GE-Proton downloads
+          pick the build for this processor.</p>
+      </description>
+    </release>
+    <release version="1.1.0" date="2026-10-20">
+      <description>
+        <p>Choose the Wine and Proton versions, download GE-Proton and Wine
+          builds, and add LSIW Proton to Steam from the new Steam integration
+          page. Every engine uses the folders chosen here.</p>
+      </description>
+    </release>
+    <release version="1.0.0" date="2026-10-15">
+      <description>
+        <p>First release: the native engine for 64-bit console programs, the
+          single C: drive, relocatable Windows folders, the Wine fallback and
+          this settings app.</p>
+      </description>
+    </release>
+  </releases>
+</component>

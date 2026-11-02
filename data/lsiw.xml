@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  LSIW additions to the shared MIME database.
+
+  shared-mime-info already recognises Windows programs: *.exe and the "MZ"
+  signature (application/x-msdownload since version 2.2, with
+  application/x-ms-dos-executable kept as its alias; application/x-ms-dos-
+  executable itself on older releases), and *.msi (application/x-msi).
+  Those types are deliberately not redefined here: declaring a type under a
+  name that is an alias would split it from the real type.
+
+  LSIW's own shortcuts (*.lwlnk) get a type of their own below.
+
+  The one gap is *.com. Windows ships ordinary 64-bit programs under that
+  extension (more.com, tree.com, chcp.com), so the name is claimed with a
+  low weight: any other package's *.com glob wins over this one.
+
+  SPDX-License-Identifier: AGPL-3.0-or-later
+-->
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="application/x-msdownload">
+    <glob pattern="*.com" weight="10"/>
+  </mime-type>
+  <!-- LSIW shortcuts: start a program of LSIW's library with its settings
+       ('lsiw launch'). Text in the Desktop Entry style. -->
+  <mime-type type="application/x-lsiw-shortcut">
+    <comment>LSIW shortcut</comment>
+    <acronym>LWLNK</acronym>
+    <sub-class-of type="text/plain"/>
+    <generic-icon name="application-x-executable"/>
+    <icon name="application-x-lsiw-shortcut"/>
+    <glob pattern="*.lwlnk"/>
+    <magic priority="60">
+      <match type="string" offset="0" value="[LSIW Shortcut]"/>
+    </magic>
+  </mime-type>
+</mime-info>

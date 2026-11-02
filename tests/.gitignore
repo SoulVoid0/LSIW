@@ -1,0 +1,4 @@
+# Build output of tests/Makefile and logs of run-tests.sh
+/bin/
+/build/
+/out/

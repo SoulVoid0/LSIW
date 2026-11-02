@@ -1,0 +1,68 @@
+# Build LSIW, its Windows test programs and its Fedora packages in a Fedora
+# container (Fedora is LSIW's primary distribution).
+# SPDX-License-Identifier: AGPL-3.0-or-later
+name: build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and test (Fedora)
+    runs-on: ubuntu-latest
+    container: registry.fedoraproject.org/fedora:latest
+    steps:
+      - name: Install build dependencies
+        run: >
+          dnf -y install gcc make pkgconf-pkg-config gtk4-devel
+          mingw64-gcc mingw64-gcc-c++ git tar gzip
+          desktop-file-utils libappstream-glib
+
+      - uses: actions/checkout@v4
+
+      - name: Build lsiw and lsiw-control
+        run: make -j"$(nproc)" GUI=yes
+
+      - name: Build the Windows test programs
+        run: make test-binaries
+
+      - name: Run the tests
+        run: make check
+
+      - name: Validate desktop and AppStream files
+        run: |
+          desktop-file-validate data/lsiw.desktop data/lsiw-control.desktop
+          appstream-util validate-relax --nonet data/io.github.lsiw.Control.metainfo.xml
+
+      - name: Staged install
+        run: |
+          make install DESTDIR="$PWD/stage" PREFIX=/usr GUI=yes
+          find stage -printf '%M %p %l\n' | sort -k2
+
+  rpm:
+    name: Fedora RPM
+    runs-on: ubuntu-latest
+    container: registry.fedoraproject.org/fedora:latest
+    steps:
+      - name: Install packaging tools
+        run: dnf -y install git rpm-build make 'dnf-command(builddep)'
+
+      - uses: actions/checkout@v4
+
+      - name: Install the spec file's build dependencies
+        run: dnf -y builddep lsiw.spec
+
+      - name: Build the packages
+        run: make rpm
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lsiw-rpms
+          path: |
+            build/rpmbuild/RPMS/**/*.rpm
+            build/rpmbuild/SRPMS/*.rpm

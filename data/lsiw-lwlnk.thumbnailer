@@ -1,0 +1,9 @@
+# Shows the icon of an LSIW shortcut (.lwlnk) in file managers that use
+# freedesktop.org thumbnailers: GNOME Files, Nemo, Caja, Thunar (tumbler),
+# PCManFM and Dolphin (KDE Frameworks 6.6+; turn on "LSIW shortcuts" under
+# Configure Dolphin > Interface > Previews if it is off). The icon is
+# embedded in the file, so this works in GNOME's thumbnailer sandbox too.
+[Thumbnailer Entry]
+TryExec=lsiw
+Exec=lsiw lwlnk thumbnail %i %o %s
+MimeType=application/x-lsiw-shortcut;

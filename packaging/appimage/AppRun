@@ -1,0 +1,35 @@
+#!/bin/sh
+# Entry point of the LSIW AppImage.
+#
+#   ./LSIW-x86_64.AppImage                 opens LSIW Control (settings app)
+#   ./LSIW-x86_64.AppImage ARGS...         runs `lsiw ARGS...`
+#   ./LSIW-x86_64.AppImage control [ARGS]  opens LSIW Control
+#   ./LSIW-x86_64.AppImage lsiw ARGS...    runs `lsiw ARGS...` (any first word)
+#
+# A link to the AppImage named `lsiw` always runs the command, and one
+# named `lsiw-control` always opens the settings app, so
+#   ln -s ~/Applications/LSIW-x86_64.AppImage ~/.local/bin/lsiw
+# gives a normal `lsiw` command.
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+HERE=$(dirname "$(readlink -f "$0")")
+APPDIR=${APPDIR:-$HERE}
+export APPDIR
+
+gui() { exec "$APPDIR/usr/bin/lsiw-control" "$@"; }
+cli() { exec "$APPDIR/usr/bin/lsiw" "$@"; }
+
+case $(basename "${ARGV0:-$0}") in
+    lsiw-control*) gui "$@" ;;
+    lsiw) cli "$@" ;;
+esac
+
+case ${1-} in
+    control|lsiw-control|--control) shift; gui "$@" ;;
+    lsiw) shift; cli "$@" ;;
+    "")
+        if [ -n "${WAYLAND_DISPLAY-}${DISPLAY-}" ]; then gui; fi
+        cli --help ;;
+    *) cli "$@" ;;
+esac

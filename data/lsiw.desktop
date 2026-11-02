@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Version=1.5
+Name=LSIW
+GenericName=Windows Program Runner
+Comment=Run Windows programs on Linux with LSIW
+Icon=lsiw
+TryExec=lsiw
+Exec=lsiw run %f
+Terminal=false
+NoDisplay=true
+StartupNotify=true
+Categories=System;Emulator;
+MimeType=application/x-msdownload;application/x-ms-dos-executable;application/x-msdos-program;application/vnd.microsoft.portable-executable;application/x-msi;application/x-ms-shortcut;application/x-lsiw-shortcut;

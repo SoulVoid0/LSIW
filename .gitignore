@@ -1,0 +1,32 @@
+# Build output (see Makefile)
+/build/
+/lsiw
+/lsiw-control
+/lsiw-*.tar.gz
+/stage/
+*.o
+*.d
+
+# Windows test programs and their by-products (built by tests/Makefile)
+*.exe
+*.dll
+*.obj
+*.pdb
+*.lib
+*.exp
+
+# Editors and tools
+*~
+*.swp
+.*.swp
+.vscode/
+.idea/
+compile_commands.json
+.cache/
+
+# Packages (make rpm, make deb, make appimage)
+*.rpm
+*.deb
+*.AppImage
+*.zsync
+*.AppDir/

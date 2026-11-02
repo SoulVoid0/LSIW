@@ -1,0 +1,9 @@
+# The "Link to Windows Application..." entry of the Create New menu in KDE
+# (Dolphin and the desktop). It copies an empty Windows shortcut; opening
+# the new shortcut asks which program it starts (see 'lsiw lnk').
+[Desktop Entry]
+Type=Link
+Name=Link to Windows Application...
+Comment=Name of the new link to a Windows application:
+Icon=lsiw
+URL=.source/lsiw-windows-link.lnk
