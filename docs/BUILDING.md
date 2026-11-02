@@ -15,7 +15,9 @@ message on other architectures.
 | Wine fallback engine (runtime)  | `wine`                                       | `wine` (or `wine64`)                                |
 | Error dialogs from the desktop  | `zenity`                                     | `zenity`                                            |
 | Checks used by the RPM build    | `desktop-file-utils libappstream-glib`       | `desktop-file-utils appstream-util`                 |
-| RPM packaging                   | `rpm-build systemd-rpm-macros git`           | (not packaged for Debian yet)                       |
+| RPM packaging (`make rpm`)      | `rpm-build systemd-rpm-macros git`           | `rpm` (`rpmbuild --nodeps`)                         |
+| Debian packaging (`make deb`)   | `dpkg dpkg-dev`                              | `dpkg-dev`                                          |
+| AppImage (`make appimage`)      | `curl file binutils` (fetches linuxdeploy)   | `curl file binutils` (fetches linuxdeploy)          |
 
 Fedora, everything at once:
 
@@ -146,20 +148,53 @@ sudo dnf install ./build/rpmbuild/RPMS/x86_64/lsiw-*.rpm
 `build/rpmbuild`. It stops early if `Version:` in `lsiw.spec` and
 `LSIW_VERSION` in `include/lsiw.h` disagree. The results:
 
-* `build/rpmbuild/RPMS/x86_64/lsiw-1.6.0-1.fcNN.x86_64.rpm`: `lsiw`, the
+* `build/rpmbuild/RPMS/x86_64/lsiw-1.7.1-1.fcNN.x86_64.rpm`: `lsiw`, the
   binfmt rule, desktop integration, `/etc/lsiw/lsiw.conf`, documentation;
 * `build/rpmbuild/RPMS/x86_64/lsiw-control-1.6.0-1.fcNN.x86_64.rpm`: the
   settings app;
-* the matching debuginfo packages and `build/rpmbuild/SRPMS/lsiw-1.6.0-1.fcNN.src.rpm`.
+* the matching debuginfo packages and `build/rpmbuild/SRPMS/lsiw-1.7.1-1.fcNN.src.rpm`.
 
 The package builds with Fedora's standard compiler flags, applies the
 binfmt rule in `%post` (`%binfmt_apply`), and removes it from the running
 kernel when the package is erased.
 
+## Debian and Ubuntu packages
+
+```sh
+make deb
+sudo apt install ./build/deb/lsiw_*.deb ./build/deb/lsiw-control_*.deb
+```
+
+`make deb` installs into `build/deb-stage` and runs
+`packaging/deb/mkdeb.sh`, which splits the tree like the RPMs into
+`build/deb/lsiw_VERSION-1_amd64.deb` (with `/etc/lsiw/lsiw.conf` as a
+conffile, the binfmt rule applied in `postinst` and removed in `prerm`) and
+`build/deb/lsiw-control_VERSION-1_amd64.deb`. The `Depends:` lines come
+from `dpkg-shlibdeps`, so they match the system the packages were built on:
+build on the oldest release you want to support. The release packages
+build `lsiw` on Ubuntu 20.04 (glibc 2.30) and `lsiw-control` on Ubuntu
+24.04 (GTK 4.12 is the oldest it builds with).
+
+## AppImage
+
+```sh
+make appimage      # build/appimage/LSIW-VERSION-x86_64.AppImage
+```
+
+`make appimage` installs into `build/appimage-stage` and runs
+`packaging/appimage/mkappimage.sh`, which bundles `lsiw`, LSIW Control and
+the GTK 4 libraries with [linuxdeploy](https://github.com/linuxdeploy/linuxdeploy)
+and its GTK plugin (downloaded into `build/tools` unless `LINUXDEPLOY`
+names an existing one; no FUSE needed). `packaging/appimage/AppRun` starts
+LSIW Control without arguments and `lsiw` with arguments, or by the name of
+a link to the AppImage (`lsiw`, `lsiw-control`). Inside an AppImage,
+`lsiw` writes the `.AppImage` file's path ($APPIMAGE) into desktop entries,
+Steam tools and shortcuts, never the temporary mount point.
+
 ## Source tarball
 
 ```sh
-make dist      # lsiw-1.6.0.tar.gz
+make dist      # lsiw-1.7.1.tar.gz
 ```
 
 In a git checkout the tarball is made with `git archive` from the current
@@ -171,4 +206,5 @@ is a `tar` of the directory without build output.
 
 `.github/workflows/build.yml` builds LSIW in a Fedora container, builds the
 Windows test programs, runs the tests, validates the desktop and AppStream
-files, and builds the RPMs.
+files, and builds the RPMs; a second job builds the Debian packages on
+Ubuntu 24.04, checks them with lintian and installs them.

@@ -29,8 +29,9 @@ LSIW also changes how Windows programs see your computer:
 * **Windows programs behave like Linux programs.** `./setup.exe` runs from
   a shell, and `.exe` files open with a double-click in your file manager.
 
-LSIW is free software under the MIT license. Fedora is the primary
-platform; any x86-64 Linux distribution with glibc should work.
+LSIW is free software under the GNU Affero General Public License v3 or
+later. It is packaged as .rpm, .deb and AppImage, so it installs on any
+x86-64 Linux distribution.
 
 ## Status: what runs, what does not
 
@@ -88,50 +89,94 @@ does not implement yet.
   An installer that bundles a driver may finish under Wine, but the driver
   itself never runs.
 
-## Installing on Fedora
+## Installing
 
-From the release zip:
+Every release on the [releases page](https://github.com/SoulVoid0/LSIW/releases)
+has the same LSIW in three formats, so it installs on every x86-64
+distribution:
+
+| Format | For | Files |
+|---|---|---|
+| `.rpm` | Fedora, RHEL/Alma/Rocky, openSUSE | `lsiw-VERSION-1.x86_64.rpm`, `lsiw-control-VERSION-1.x86_64.rpm`, source RPM |
+| `.deb` | Debian, Ubuntu, Linux Mint, Pop!_OS, elementary | `lsiw_VERSION-1_amd64.deb`, `lsiw-control_VERSION-1_amd64.deb` |
+| `.AppImage` | any distribution (Arch, Manjaro, Gentoo, Void, NixOS, ...) | `LSIW-VERSION-x86_64.AppImage` |
+
+`lsiw` is the command and the `.exe` integration; `lsiw-control` is the
+settings app (GTK 4). `SHA256SUMS` lists the checksum of every file.
+
+### The installer (any distribution)
 
 ```sh
-unzip lsiw-1.6.0-release.zip -d lsiw-release
-cd lsiw-release
+curl -fLO https://github.com/SoulVoid0/LSIW/releases/latest/download/install.sh
 sh install.sh            # asks for your password through sudo
 ```
 
-`install.sh` checks every file against `SHA256SUMS`, installs `lsiw` and
-`lsiw-control` with dnf (with GTK 4 and Wine), rebuilds them from the
-source RPM first if your Fedora is older than the prebuilt packages need,
-and offers to add LSIW Proton to Steam. Options: `--steam`, `--ge`
-(download GE-Proton), `--no-wine`, `--no-control`, `--yes`, `--uninstall`;
-`sh install.sh --help` lists them. Running it again is safe.
+`install.sh` picks the format for your system (dnf or zypper: rpm; apt:
+deb; anything else: the AppImage), downloads the files it needs from the
+release (or uses the ones next to it), checks them against `SHA256SUMS`,
+installs `lsiw` and LSIW Control with Wine, and offers to add LSIW Proton
+to Steam. On a Fedora older than the prebuilt RPMs need it rebuilds them
+from the source RPM. Options: `--format=rpm|deb|appimage`, `--steam`,
+`--ge` (download GE-Proton), `--no-wine`, `--no-control`, `--yes`,
+`--uninstall`; `sh install.sh --help` lists them. Running it again is safe.
 
-Or build the packages from a source checkout:
+### Fedora, RHEL, openSUSE (.rpm)
 
 ```sh
-sudo dnf install git make rpm-build 'dnf-command(builddep)'
-git clone https://github.com/SoulVoid0/LSIW.git
-cd lsiw
-sudo dnf builddep lsiw.spec
-make rpm
-sudo dnf install ./build/rpmbuild/RPMS/x86_64/lsiw-*.rpm
+sudo dnf install ./lsiw-1.7.1-1.x86_64.rpm ./lsiw-control-1.7.1-1.x86_64.rpm
 sudo dnf install wine        # optional: the fallback engine
+# openSUSE: sudo zypper install --allow-unsigned-rpm ./lsiw-*.rpm
 ```
 
-This installs two packages: `lsiw` (the `lsiw` command, the `.exe`
-integration, `/etc/lsiw/lsiw.conf`) and `lsiw-control` (the settings app).
+The prebuilt RPMs need glibc 2.38 (Fedora 39 or newer). On older systems
+rebuild them: `rpmbuild --rebuild lsiw-1.7.1-1.src.rpm` (or let
+`install.sh` do it).
 
-Or install directly from the source tree:
+### Debian, Ubuntu, Mint (.deb)
 
 ```sh
-sudo dnf install gcc make gtk4-devel
-make
+sudo apt install ./lsiw_1.7.1-1_amd64.deb ./lsiw-control_1.7.1-1_amd64.deb
+```
+
+`lsiw` runs on Debian 11, Ubuntu 20.04 and newer. LSIW Control needs GTK
+4.12 (Debian 13, Ubuntu 24.04, Mint 22 and newer); on older releases
+install `lsiw_*.deb` alone and use the command line. Remove with
+`sudo apt remove lsiw-control lsiw`.
+
+### Any distribution (.AppImage)
+
+```sh
+chmod +x LSIW-1.7.1-x86_64.AppImage
+./LSIW-1.7.1-x86_64.AppImage                      # opens LSIW Control
+./LSIW-1.7.1-x86_64.AppImage run setup.exe        # any lsiw command
+ln -s "$PWD/LSIW-1.7.1-x86_64.AppImage" ~/.local/bin/lsiw   # a normal `lsiw` command
+```
+
+The AppImage holds `lsiw`, LSIW Control and the GTK 4 libraries, so it
+needs nothing installed (FUSE is optional: set
+`APPIMAGE_EXTRACT_AND_RUN=1` without it). Started with arguments, or
+through a link named `lsiw`, it is the `lsiw` command; without arguments,
+or through a link named `lsiw-control`, it opens LSIW Control.
+`lsiw register --user` from the AppImage sets up the `.exe`
+double-click with the AppImage's path. Starting `.exe` files directly from
+a shell (`./setup.exe`, binfmt_misc) needs root and a fixed path, so it
+comes only with the rpm and deb packages. The `lsiw` command in the
+AppImage runs on glibc 2.30 or newer; LSIW Control needs glibc 2.38.
+
+### From source
+
+```sh
+git clone https://github.com/SoulVoid0/LSIW.git
+cd LSIW
+make                         # needs gcc, make, and GTK 4 headers for LSIW Control
 sudo make install            # into /usr/local; PREFIX=/usr for /usr
 ```
 
-Other distributions: install a C compiler, make and (for the settings app)
-the GTK 4 development files, then `make && sudo make install`. See
-[docs/BUILDING.md](docs/BUILDING.md) for Debian/Ubuntu package names, the
-test suite and all build options.
+Or build the packages yourself: `make rpm` (Fedora, needs rpm-build and
+the spec's build dependencies), `make deb` (needs dpkg-dev) or
+`make appimage` (downloads linuxdeploy). See
+[docs/BUILDING.md](docs/BUILDING.md) for package names per distribution,
+the test suite and all build options.
 
 ## Quick start
 
@@ -618,7 +663,8 @@ lsiw.spec           Fedora package
 
 ## License
 
-MIT; see [LICENSE](LICENSE). LSIW's engine is original code written from
+GNU Affero General Public License, version 3 or (at your option) any
+later version; see [LICENSE](LICENSE). LSIW's engine is original code written from
 public documentation of Windows behaviour and file formats; it contains no
 code from Wine or Microsoft. Wine, when installed, is a separate program
 that LSIW starts.

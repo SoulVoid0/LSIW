@@ -63,6 +63,7 @@ find "$APPDIR/usr/bin" -type f -exec strip --strip-unneeded {} + 2>/dev/null || 
 
 # The oldest C library the bundled GTK accepts (LSIW Control); lsiw itself
 # may need less. AppRun checks it before starting LSIW Control.
+# shellcheck disable=SC2046  # one argument per library
 need=$(objdump -T "$APPDIR/usr/bin/lsiw-control" $(ldd "$APPDIR/usr/bin/lsiw-control" |
         awk '/=> \// && !/libc\.so|libm\.so|ld-linux|libpthread|libdl|librt/ {print $3}') 2>/dev/null |
         grep -o 'GLIBC_2\.[0-9]*' | sort -t. -k2 -n | tail -1 | sed 's/GLIBC_//')

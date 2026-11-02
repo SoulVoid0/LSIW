@@ -66,3 +66,30 @@ jobs:
           path: |
             build/rpmbuild/RPMS/**/*.rpm
             build/rpmbuild/SRPMS/*.rpm
+
+  deb:
+    name: Debian packages
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc make pkg-config libgtk-4-dev dpkg-dev lintian
+
+      - uses: actions/checkout@v4
+
+      - name: Build the packages
+        run: make deb GUI=yes
+
+      - name: Check them with lintian
+        run: lintian --fail-on error build/deb/*.deb
+
+      - name: Install and run
+        run: |
+          sudo apt-get install -y ./build/deb/lsiw_*.deb ./build/deb/lsiw-control_*.deb
+          lsiw --version
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lsiw-debs
+          path: build/deb/*.deb
