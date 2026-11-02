@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Tag to build and publish (for example v1.7.1)
+        description: Tag to publish (for example v1.7.1); created on the chosen branch's commit if it does not exist
         required: true
 
 permissions:
@@ -33,8 +33,6 @@ jobs:
           DEBIAN_FRONTEND=noninteractive apt-get install -y gcc make dpkg-dev binutils git ca-certificates
 
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ env.TAG }}
 
       - name: Build lsiw
         run: |
@@ -67,8 +65,6 @@ jobs:
             libglib2.0-bin librsvg2-common
 
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ env.TAG }}
 
       - uses: actions/download-artifact@v4
         with:
@@ -160,5 +156,5 @@ jobs:
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" dist/* --clobber
           else
-            gh release create "$TAG" dist/* --title "LSIW ${TAG#v}" --notes-file notes.md --verify-tag
+            gh release create "$TAG" dist/* --title "LSIW ${TAG#v}" --notes-file notes.md --target "$GITHUB_SHA"
           fi
