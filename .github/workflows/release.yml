@@ -92,11 +92,24 @@ jobs:
           install -m 0755 cli/lsiw build/appimage-stage/usr/bin/lsiw
           sh packaging/appimage/mkappimage.sh build/appimage-stage "$VERSION" build/appimage
 
+      - uses: actions/upload-artifact@v4
+        with:
+          name: appimage
+          path: build/appimage/*.AppImage
+
       - name: Smoke test
+        timeout-minutes: 10
         run: |
+          set -x
           chmod +x build/appimage/*.AppImage
-          APPIMAGE_EXTRACT_AND_RUN=1 build/appimage/LSIW-$VERSION-x86_64.AppImage --version
-          sudo apt-get install -y ./cli/out/lsiw_*.deb ./build/deb/lsiw-control_*.deb
+          ls -la build/LSIW.AppDir
+          head -40 build/LSIW.AppDir/AppRun
+          ls build/LSIW.AppDir/apprun-hooks || true
+          timeout 60 sh -x build/LSIW.AppDir/AppRun --version < /dev/null
+          (cd /tmp && timeout 120 "$GITHUB_WORKSPACE/build/appimage/LSIW-$VERSION-x86_64.AppImage" --appimage-extract >/dev/null)
+          timeout 60 /tmp/squashfs-root/AppRun --version < /dev/null
+          APPIMAGE_EXTRACT_AND_RUN=1 timeout 120 build/appimage/LSIW-$VERSION-x86_64.AppImage --version < /dev/null
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ./cli/out/lsiw_*.deb ./build/deb/lsiw-control_*.deb
           lsiw --version
 
       - name: Collect the release files
