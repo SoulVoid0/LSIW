@@ -105,9 +105,10 @@ jobs:
           ls -la build/LSIW.AppDir
           head -40 build/LSIW.AppDir/AppRun
           ls build/LSIW.AppDir/apprun-hooks || true
-          timeout 60 sh -x build/LSIW.AppDir/AppRun --version < /dev/null
+          timeout 60 bash -x build/LSIW.AppDir/AppRun --version < /dev/null || echo "AppDir run: exit $?"
+          cat build/LSIW.AppDir/apprun-hooks/linuxdeploy-plugin-gtk.sh
           (cd /tmp && timeout 120 "$GITHUB_WORKSPACE/build/appimage/LSIW-$VERSION-x86_64.AppImage" --appimage-extract >/dev/null)
-          timeout 60 /tmp/squashfs-root/AppRun --version < /dev/null
+          timeout 60 /tmp/squashfs-root/AppRun --version < /dev/null || echo "extracted run: exit $?"
           APPIMAGE_EXTRACT_AND_RUN=1 timeout 120 build/appimage/LSIW-$VERSION-x86_64.AppImage --version < /dev/null
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ./cli/out/lsiw_*.deb ./build/deb/lsiw-control_*.deb
           lsiw --version
