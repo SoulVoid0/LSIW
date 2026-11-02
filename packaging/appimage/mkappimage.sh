@@ -69,6 +69,14 @@ need=$(objdump -T "$APPDIR/usr/bin/lsiw-control" $(ldd "$APPDIR/usr/bin/lsiw-con
         grep -o 'GLIBC_2\.[0-9]*' | sort -t. -k2 -n | tail -1 | sed 's/GLIBC_//')
 echo "${need:-2.17}" > "$APPDIR/usr/share/doc/lsiw/gui-glibc"
 
+# appimagetool wants a PNG for .DirIcon (file managers show it).
+ICON=$APPDIR/usr/share/icons/hicolor/scalable/apps/lsiw.svg
+if command -v rsvg-convert >/dev/null 2>&1; then
+    mkdir -p "$APPDIR/usr/share/icons/hicolor/256x256/apps"
+    rsvg-convert -w 256 -h 256 -o "$APPDIR/usr/share/icons/hicolor/256x256/apps/lsiw.png" "$ICON"
+    ICON=$APPDIR/usr/share/icons/hicolor/256x256/apps/lsiw.png
+fi
+
 cd "$(dirname "$OUTDIR")"
 export APPIMAGE_EXTRACT_AND_RUN=1 DEPLOY_GTK_VERSION=4 NO_STRIP=1
 export LINUXDEPLOY_OUTPUT_VERSION="$VERSION"
@@ -78,7 +86,7 @@ export LDAI_UPDATE_INFORMATION="gh-releases-zsync|SoulVoid0|LSIW|latest|LSIW-*x8
     --executable "$APPDIR/usr/bin/lsiw-control" \
     --executable "$APPDIR/usr/bin/lsiw" \
     --desktop-file "$APPDIR/usr/share/applications/lsiw-control.desktop" \
-    --icon-file "$APPDIR/usr/share/icons/hicolor/scalable/apps/lsiw.svg" \
+    --icon-file "$ICON" \
     --custom-apprun "$HERE/AppRun" \
     --plugin gtk --output appimage
 ls -l "$OUTDIR"
