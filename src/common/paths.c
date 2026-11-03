@@ -6,7 +6,8 @@
  * "/home/me/file.txt" and "C:\mnt\usb" and "C:\run\media\me\USB" are the
  * mounted drives, exactly as Linux sees them. Anything else a program
  * creates under C:\ is a real folder inside the C: drive. Other drive
- * letters do not exist; a path that names one (D:\x) is folded onto C:.
+ * letters exist only when the user makes a folder one ([drives] d = ...,
+ * see lsiw_drive_path()); a path naming any other letter is folded onto C:.
  *
  * Windows itself also expects a few folders right under C:\ (windows,
  * Program Files, ProgramData, users). Those are "anchored" variables: the
@@ -118,13 +119,21 @@ char *lsiw_win_to_linux(const char *winpath)
                  net ? net : "/run/user", server, share);
         absolute = 2;
     } else {
-        if (isalpha((unsigned char)p[0]) && p[1] == ':') {          /* any drive -> C: */
+        const char *drive = NULL;
+        if (isalpha((unsigned char)p[0]) && p[1] == ':') {
+            /* An extra drive (D: = a folder the user chose); any other
+             * letter is folded onto C:. */
+            if (p[0] != 'C' && p[0] != 'c') drive = lsiw_drive_path((unsigned char)p[0]);
             p += 2;
             /* A bare "C:" is the drive itself, as people mean it (Windows
              * would read it as the current folder of that drive). */
             if (!*p) { p[-1] = '/'; p--; }
         }
-        if (*p == '/') {
+        if (drive) {
+            /* "D:x" (relative to D:'s current folder) is read as D:\x. */
+            set_path(out, drive);
+            absolute = 3;
+        } else if (*p == '/') {
             /* C:\ is the C: drive folder; before it exists, the Linux root. */
             struct stat st;
             absolute = 1;

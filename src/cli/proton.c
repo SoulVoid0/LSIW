@@ -283,6 +283,16 @@ static void add_mount(char **m, size_t *len, size_t *cap, const char *path)
     *len += tl;
 }
 
+/* The folders of the extra drives (D:, E:, ...): Steam's runtime
+ * container shows only folders it is told about. */
+static void add_drive_mounts(char **m, size_t *len, size_t *cap)
+{
+    for (int l = 'A'; l <= 'Z'; l++) {
+        const char *p = l == 'C' ? NULL : lsiw_drive_path(l);
+        if (p) add_mount(m, len, cap, p);
+    }
+}
+
 static char *shared_mounts(void)
 {
     size_t len = 0, cap = 256;
@@ -295,6 +305,7 @@ static char *shared_mounts(void)
         if (t[i].anchor) add_mount(&m, &len, &cap, lsiw_var_linux(t[i].name));
     static const char *const disks[] = { "/mnt", "/media", "/run/media", "/srv", NULL };
     for (int i = 0; disks[i]; i++) if (is_dir(disks[i])) add_mount(&m, &len, &cap, disks[i]);
+    add_drive_mounts(&m, &len, &cap);
     return m;
 }
 
@@ -373,6 +384,8 @@ int lsiw_proton_prepare(const char *compat, int verbose, char **mounts)
     write_links(compat, &l);
     links_free(&l);
     free(drive_c);
+    if (lsiw_prefix_link_drives(compat, verbose) < 0) rc = -1;
+    add_drive_mounts(&m, &mlen, &mcap);
     if (mounts) *mounts = m; else free(m);
     return rc;
 }

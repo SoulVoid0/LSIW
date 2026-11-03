@@ -14,7 +14,7 @@
 extern "C" {
 #endif
 
-#define LSIW_VERSION "1.7.1"
+#define LSIW_VERSION "1.8.0"
 
 /* ------------------------------------------------------------------ */
 /* Variable table                                                       */
@@ -121,6 +121,38 @@ int  lsiw_cdrive_move(const char *path, int folders, int verbose);
  * ~/.cdrive already has files. Called by lsiw_sync_root() and
  * lsiw_cdrive_move(). Returns 0, or -1 when the move failed. */
 int  lsiw_cdrive_migrate(int verbose);
+
+/* ------------------------------------------------------------------ */
+/* Extra drives: D:, E:, ... (prefix.c)                                 */
+/* ------------------------------------------------------------------ */
+
+/* Besides C:, any letter but C can be a Linux folder the user picks:
+ * [drives] d = /home/me/Games makes that folder D:\ for the native engine
+ * (paths, GetLogicalDrives, GetDriveType, volume information), for Wine
+ * (dosdevices/d: of the prefix) and for Proton (dosdevices/d: of its
+ * prefix, and the folder is shown inside Steam's runtime container).
+ * Letters are 'A'..'Z' (either case). */
+/* The Linux folder of a drive: lsiw_root_dir() for C, the configured
+ * folder (tokens expanded, no trailing slash) for another letter, NULL
+ * for a letter that is no drive. Valid until the setting changes. */
+const char *lsiw_drive_path(int letter);
+/* The setting as written in the config, or NULL. */
+const char *lsiw_drive_setting(int letter);
+/* Make `path` the drive `letter` (NULL or "" removes it). Returns 0, -1
+ * for a letter that cannot be used (C or not a letter), -2 when path is
+ * not an absolute folder ("~/x" and ${HOME} tokens are accepted). Not
+ * saved until lsiw_config_save(). */
+int  lsiw_drive_set(int letter, const char *path);
+/* Bit N set for every drive (bit 2 = C:, always), like GetLogicalDrives. */
+uint32_t lsiw_drive_mask(void);
+/* The extra drive (not C) whose folder holds the absolute Linux path
+ * `abs` (the deepest one when they nest), with the folder's length in
+ * *len; 0 if none. */
+int  lsiw_drive_for_linux(const char *abs, size_t *len);
+/* Point <compat>/pfx/dosdevices/x: at every extra drive, and remove the
+ * links of drives that were removed (only links LSIW made, listed in
+ * <compat>/.lsiw-drives). Returns 0 or -1. */
+int  lsiw_prefix_link_drives(const char *compat, int verbose);
 
 /* ------------------------------------------------------------------ */
 /* Prefixes (prefix.c)                                                  */
@@ -393,6 +425,26 @@ char **lsiw_vdf_values(const char *text, const char *key);
 char  *lsiw_vdf_value(const char *text, const char *key);
 /* A whole small text file, NUL-terminated; NULL on error. */
 char  *lsiw_read_text(const char *path);
+
+/* ------------------------------------------------------------------ */
+/* New releases (update.c)                                              */
+/* ------------------------------------------------------------------ */
+
+/* Releases are published at https://github.com/LSIW_REPO/releases. */
+#define LSIW_REPO "SoulVoid0/LSIW"
+/* 1 unless [update] check = false or $LSIW_NO_UPDATE_CHECK is set. */
+int   lsiw_update_auto(void);
+/* <data>/update-check, where the last check is kept. Caller frees. */
+char *lsiw_update_state_path(void);
+/* The newest release found by the last check (*latest, caller frees;
+ * NULL if unknown) and when it ran (seconds since 1970). -1 if never. */
+int   lsiw_update_cached(char **latest, long long *checked);
+int   lsiw_update_store(const char *latest);
+/* 1 if version a is newer than b ("1.10.0" > "1.9.2"; a leading v is
+ * ignored). */
+int   lsiw_version_newer(const char *a, const char *b);
+/* 1 for a version made of digits and dots only. */
+int   lsiw_version_valid(const char *v);
 
 /* ------------------------------------------------------------------ */
 /* Misc helpers                                                         */

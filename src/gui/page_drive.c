@@ -1,11 +1,12 @@
 /* LSIW Control: the C: drive page.
  *
- * LSIW has exactly one drive. C:\ is one folder the user chooses here
+ * C:\ is one folder the user chooses here
  * ([drive] c_drive, default ~/.cdrive), the same for the native engine,
  * Wine and Proton. lsiw_sync_root() fills it with links to every top-level
  * Linux folder, so C:\home\me\file.txt is /home/me/file.txt and other disks
- * are the folders Linux mounts them on (C:\run\media\me\USB), never extra
- * drive letters. The Windows folders a program expects directly under C:\
+ * are the folders Linux mounts them on (C:\run\media\me\USB). Besides C:,
+ * any folder can be made a drive of its own (D:, E:, ...: [drives] in the
+ * config, the "Other drives" list here). The Windows folders a program expects directly under C:\
  * (windows, Program Files, ProgramData, users) are anchored there wherever
  * they live on Linux. This page lists the drive, moves it (`lsiw cdrive
  * set`, which moves its contents along and leaves a link behind), and
@@ -23,6 +24,9 @@ struct drive_page {
     GtkWidget *root_label, *list, *summary;
     GtkWidget *win_entry, *win_result, *lin_entry, *lin_result;
     GtkWidget *status, *with_folders;
+    GtkWidget *drives_list, *letter_dd;
+    GtkStringList *letters;
+    int pending_letter;          /* the drive a folder dialog is choosing for */
     GtkTextView *output;
     LsiwTask *runner;
 };
@@ -190,6 +194,175 @@ static void lin_changed_cb(GtkEditable *e, gpointer data)
 }
 
 /* ------------------------------------------------------------------ */
+/* Other drives (D:, E:, ...)                                           */
+/* ------------------------------------------------------------------ */
+
+static void drives_changed(struct drive_page *p)
+{
+    if (!lsiw_gui_save_config(p->base.widget)) return;
+    /* The shared prefix's drive letters now; prefixes of programs follow
+     * when they next start. */
+    lsiw_prefix_link_drives(lsiw_shared_dir(), 1);
+    lsiw_gui_refresh_all(p->base.widget, LSIW_REFRESH_CONFIG);
+}
+
+static void drive_folder_chosen_cb(GObject *src, GAsyncResult *res, gpointer data)
+{
+    GtkWidget *page = data;
+    struct drive_page *p = g_object_get_data(G_OBJECT(page), "lsiw-page");
+    GError *err = NULL;
+    GFile *f = gtk_file_dialog_select_folder_finish(GTK_FILE_DIALOG(src), res, &err);
+    if (f && p && gtk_widget_get_root(page) && p->pending_letter) {
+        char *path = g_file_get_path(f);
+        if (path && !strcmp(path, "/")) {
+            lsiw_gui_alert(page, "The whole Linux filesystem cannot be a drive",
+                           "It is already on C: (C:\\home, C:\\mnt, ...). Choose a folder.");
+        } else if (path) {
+            int l = p->pending_letter;
+            if (lsiw_drive_set(l, path) == 0) {
+                lsiw_mkdirs(path, 0755);
+                drives_changed(p);
+                char *m = g_strdup_printf("%c:\\ is now %s.", l, path);
+                gtk_label_set_text(GTK_LABEL(p->status), m);
+                g_free(m);
+            }
+        }
+        g_free(path);
+    }
+    g_clear_error(&err);
+    g_clear_object(&f);
+    g_object_unref(page);
+}
+
+static void choose_drive_folder(struct drive_page *p, int letter)
+{
+    p->pending_letter = letter;
+    GtkFileDialog *d = gtk_file_dialog_new();
+    char *title = g_strdup_printf("Which folder should be %c:?", letter);
+    gtk_file_dialog_set_title(d, title);
+    g_free(title);
+    gtk_file_dialog_set_accept_label(d, "_Use as drive");
+    gtk_file_dialog_set_modal(d, TRUE);
+    const char *cur = lsiw_drive_path(letter);
+    GFile *start = g_file_new_for_path(cur && g_file_test(cur, G_FILE_TEST_IS_DIR) ? cur : g_get_home_dir());
+    gtk_file_dialog_set_initial_folder(d, start);
+    g_object_unref(start);
+    gtk_file_dialog_select_folder(d, lsiw_gui_window(p->base.widget), NULL, drive_folder_chosen_cb,
+                                  g_object_ref(p->base.widget));
+    g_object_unref(d);
+}
+
+static void drive_change_cb(GtkButton *b, gpointer data)
+{
+    int l = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(b), "lsiw-letter"));
+    choose_drive_folder(data, l);
+}
+
+static void drive_open_cb(GtkButton *b, gpointer data)
+{
+    struct drive_page *p = data;
+    int l = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(b), "lsiw-letter"));
+    const char *path = lsiw_drive_path(l);
+    if (path) {
+        lsiw_mkdirs(path, 0755);
+        lsiw_gui_open_folder(p->base.widget, path);
+    }
+}
+
+static void drive_remove_cb(GtkButton *b, gpointer data)
+{
+    struct drive_page *p = data;
+    int l = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(b), "lsiw-letter"));
+    lsiw_drive_set(l, NULL);
+    drives_changed(p);
+    char *m = g_strdup_printf("%c: removed; its folder and files are kept.", l);
+    gtk_label_set_text(GTK_LABEL(p->status), m);
+    g_free(m);
+}
+
+static GtkWidget *drive_button(struct drive_page *p, const char *label, const char *tip, int letter, GCallback cb)
+{
+    GtkWidget *b = gtk_button_new_with_mnemonic(label);
+    gtk_widget_set_tooltip_text(b, tip);
+    g_object_set_data(G_OBJECT(b), "lsiw-letter", GINT_TO_POINTER(letter));
+    g_signal_connect(b, "clicked", cb, p);
+    return b;
+}
+
+static void fill_drives(struct drive_page *p)
+{
+    gtk_list_box_remove_all(GTK_LIST_BOX(p->drives_list));
+    /* The free letters, for "Add drive". */
+    guint n = g_list_model_get_n_items(G_LIST_MODEL(p->letters));
+    const char *chosen = NULL;
+    guint sel = gtk_drop_down_get_selected(GTK_DROP_DOWN(p->letter_dd));
+    char keep[3] = "";
+    if (sel != GTK_INVALID_LIST_POSITION && sel < n) {
+        chosen = gtk_string_list_get_string(p->letters, sel);
+        if (chosen) g_strlcpy(keep, chosen, sizeof keep);
+    }
+    const char **free_letters = g_new0(const char *, 27);
+    static char names[26][3];
+    int nf = 0;
+    guint want = 0;
+    for (int l = 'D'; l <= 'Z' + 2; l++) {
+        int letter = l <= 'Z' ? l : l - 'Z' - 1 + 'A';     /* D..Z, then A, B */
+        if (lsiw_drive_path(letter)) {
+            GtkWidget *row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+            gtk_widget_set_margin_top(row, 4);
+            gtk_widget_set_margin_bottom(row, 4);
+            gtk_widget_set_margin_start(row, 8);
+            gtk_widget_set_margin_end(row, 8);
+            char lab[4] = { (char)letter, ':', '\\', 0 };
+            GtkWidget *ll = gtk_label_new(lab);
+            gtk_label_set_width_chars(GTK_LABEL(ll), 4);
+            gtk_label_set_xalign(GTK_LABEL(ll), 0);
+            gtk_widget_add_css_class(ll, "lsiw-bold");
+            gtk_box_append(GTK_BOX(row), ll);
+            gtk_box_append(GTK_BOX(row), gtk_label_new("→"));
+            const char *path = lsiw_drive_path(letter);
+            GtkWidget *t = gtk_label_new(path);
+            gtk_label_set_xalign(GTK_LABEL(t), 0);
+            gtk_label_set_ellipsize(GTK_LABEL(t), PANGO_ELLIPSIZE_MIDDLE);
+            gtk_label_set_selectable(GTK_LABEL(t), TRUE);
+            gtk_widget_set_hexpand(t, TRUE);
+            gtk_widget_set_tooltip_text(t, path);
+            gtk_widget_add_css_class(t, "lsiw-mono");
+            if (!g_file_test(path, G_FILE_TEST_IS_DIR)) gtk_widget_add_css_class(t, "lsiw-off");
+            gtk_box_append(GTK_BOX(row), t);
+            gtk_box_append(GTK_BOX(row), drive_button(p, "Open", "Open the folder in the file manager",
+                                                      letter, G_CALLBACK(drive_open_cb)));
+            gtk_box_append(GTK_BOX(row), drive_button(p, "Change…", "Choose another folder for this drive",
+                                                      letter, G_CALLBACK(drive_change_cb)));
+            gtk_box_append(GTK_BOX(row), drive_button(p, "Remove", "This letter is no drive any more; "
+                                                      "the folder and its files are kept",
+                                                      letter, G_CALLBACK(drive_remove_cb)));
+            gtk_list_box_append(GTK_LIST_BOX(p->drives_list), row);
+        } else {
+            names[nf][0] = (char)letter;
+            names[nf][1] = ':';
+            names[nf][2] = 0;
+            if (keep[0] == letter) want = (guint)nf;
+            free_letters[nf] = names[nf];
+            nf++;
+        }
+    }
+    gtk_string_list_splice(p->letters, 0, n, free_letters);
+    g_free(free_letters);
+    if (nf) gtk_drop_down_set_selected(GTK_DROP_DOWN(p->letter_dd), want);
+    lsiw_gui_action_enable(p->actions, "add-drive", nf > 0);
+}
+
+static void act_add_drive(GSimpleAction *a, GVariant *param, gpointer data)
+{
+    (void)a; (void)param;
+    struct drive_page *p = data;
+    guint sel = gtk_drop_down_get_selected(GTK_DROP_DOWN(p->letter_dd));
+    const char *l = sel != GTK_INVALID_LIST_POSITION ? gtk_string_list_get_string(p->letters, sel) : NULL;
+    if (l && *l) choose_drive_folder(p, *l);
+}
+
+/* ------------------------------------------------------------------ */
 /* Actions                                                              */
 /* ------------------------------------------------------------------ */
 
@@ -291,6 +464,7 @@ static const GActionEntry drive_actions[] = {
     { .name = "open", .activate = act_open },
     { .name = "choose", .activate = act_choose },
     { .name = "reset", .activate = act_reset },
+    { .name = "add-drive", .activate = act_add_drive },
 };
 
 static void runner_state_cb(LsiwTask *r, gpointer data)
@@ -327,6 +501,7 @@ static void drive_refresh(LsiwPage *base, enum lsiw_refresh_reason reason)
     (void)reason;
     struct drive_page *p = (struct drive_page *)base;
     fill_list(p);
+    fill_drives(p);
     if (p->runner) runner_state_cb(p->runner, p);
     /* Folder locations decide where anchored Windows paths lead. */
     convert_windows(p);
@@ -373,10 +548,10 @@ GtkWidget *lsiw_page_drive_new(void)
         "and every Steam game (it is the shared prefix's <tt>drive_c</tt>). It also shows "
         "your whole Linux filesystem: <tt>C:\\home\\me\\notes.txt</tt> is "
         "<tt>/home/me/notes.txt</tt>, and other disks are the folders Linux mounts them on "
-        "(<tt>C:\\run\\media\\me\\USB</tt>, <tt>C:\\mnt\\data</tt>), never extra drive letters "
-        "such as D:. The folders Windows expects right under C:\\ (windows, Program Files, "
-        "ProgramData, users) appear there wherever you keep them; choose their locations on "
-        "the Locations page. A path naming another drive letter is read as C:."));
+        "(<tt>C:\\run\\media\\me\\USB</tt>, <tt>C:\\mnt\\data</tt>). The folders Windows "
+        "expects right under C:\\ (windows, Program Files, ProgramData, users) appear there "
+        "wherever you keep them; choose their locations on the Locations page. Any other "
+        "folder can also be a drive of its own (D:, E:, …): see <b>Other drives</b> below."));
 
     GtkWidget *row = lsiw_gui_wrap_row(8);
     GtkWidget *l = gtk_label_new("C: drive:");
@@ -422,6 +597,35 @@ GtkWidget *lsiw_page_drive_new(void)
     gtk_label_set_width_chars(GTK_LABEL(p->summary), 20);
     gtk_widget_add_css_class(p->summary, "lsiw-dim");
     gtk_box_append(GTK_BOX(page), p->summary);
+
+    /* Other drives */
+    gtk_box_append(GTK_BOX(page), lsiw_gui_heading("Other drives"));
+    gtk_box_append(GTK_BOX(page), lsiw_gui_paragraph(
+        "Make any Linux folder a drive: with <tt>~/Games</tt> as D:, Windows programs see "
+        "<tt>D:\\</tt> as that folder, under LSIW's engine, Wine and Proton (Steam games "
+        "too). Good for game libraries on another disk, or programs that insist on a "
+        "drive letter. A path naming a letter that is no drive is read as C:. "
+        "Command line: <tt>lsiw drives</tt>."));
+    p->drives_list = gtk_list_box_new();
+    gtk_list_box_set_selection_mode(GTK_LIST_BOX(p->drives_list), GTK_SELECTION_NONE);
+    GtkWidget *none = gtk_label_new("No other drives: only C:.");
+    gtk_widget_add_css_class(none, "lsiw-dim");
+    gtk_widget_set_margin_top(none, 8);
+    gtk_widget_set_margin_bottom(none, 8);
+    gtk_list_box_set_placeholder(GTK_LIST_BOX(p->drives_list), none);
+    GtkWidget *dframe = gtk_frame_new(NULL);
+    gtk_frame_set_child(GTK_FRAME(dframe), p->drives_list);
+    gtk_box_append(GTK_BOX(page), dframe);
+    GtkWidget *addrow = lsiw_gui_wrap_row(8);
+    p->letters = gtk_string_list_new(NULL);
+    p->letter_dd = gtk_drop_down_new(G_LIST_MODEL(p->letters), NULL);
+    gtk_widget_set_tooltip_text(p->letter_dd, "The drive letter");
+    lsiw_gui_wrap_row_append(addrow, gtk_label_new("New drive:"));
+    lsiw_gui_wrap_row_append(addrow, p->letter_dd);
+    GtkWidget *addb = lsiw_gui_action_button("_Add drive…", "drive.add-drive");
+    gtk_widget_set_tooltip_text(addb, "Choose the folder this letter stands for");
+    lsiw_gui_wrap_row_append(addrow, addb);
+    gtk_box_append(GTK_BOX(page), addrow);
 
     /* Path converter */
     gtk_box_append(GTK_BOX(page), lsiw_gui_heading("Path converter"));

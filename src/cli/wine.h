@@ -89,9 +89,15 @@ extern const char lsiw_help_steam[], lsiw_help_runners[];
 /* ------------------------------------------------------------------ */
 
 int lsiw_cmd_cdrive(int argc, char **argv);
+int lsiw_cmd_drives(int argc, char **argv);
+int lsiw_cmd_update(int argc, char **argv);
+/* After an interactive command: a one-line note when a newer LSIW is
+ * known, and a background check once a day (update.c). */
+void lsiw_update_notice(void);
 int lsiw_cmd_prefix(int argc, char **argv);
 int lsiw_cmd_programs(int argc, char **argv);
 extern const char lsiw_help_cdrive[], lsiw_help_prefix[], lsiw_help_programs[];
+extern const char lsiw_help_drives[], lsiw_help_update[];
 /* Run a program the way 'lsiw run --engine=ENGINE' does (ENGINE NULL, ""
  * or "default": the default engine). argv[0] is the program. Returns the
  * exit status for this process. */

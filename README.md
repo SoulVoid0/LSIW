@@ -9,12 +9,16 @@ programs LSIW's engine cannot run yet.
 
 LSIW also changes how Windows programs see your computer:
 
-* **One drive.** `C:` is one folder you choose (`~/.cdrive` by default),
-  the same for LSIW's engine, Wine, Proton and Steam games, and it also
-  shows the whole Linux file system: `C:\home\me\notes.txt` is
-  `/home/me/notes.txt`; a USB stick mounted at `/run/media/me/USB` is
-  `C:\run\media\me\USB`. There is no `D:` or `Z:`: other disks are folders
-  on `C:`, as they are on Linux.
+* **One C: drive, and the drives you choose.** `C:` is one folder you
+  choose (`~/.cdrive` by default), the same for LSIW's engine, Wine, Proton
+  and Steam games, and it also shows the whole Linux file system:
+  `C:\home\me\notes.txt` is `/home/me/notes.txt`; a USB stick mounted at
+  `/run/media/me/USB` is `C:\run\media\me\USB`. Any other folder can be a
+  drive of its own (`lsiw drives add D ~/Games` makes it `D:\`); there is
+  no `Z:`.
+* **Updates.** LSIW looks for a new release once a day (`lsiw update auto
+  off` stops it) and LSIW Control's *Updates* page installs it, verified
+  against the release's checksums.
 * **One prefix.** Every program and game uses one shared prefix, under Wine
   and under Proton, Steam games included, unless you give it its own.
 * **A library.** Add your Windows programs and games and give each its own
@@ -104,6 +108,26 @@ distribution:
 `lsiw` is the command and the `.exe` integration; `lsiw-control` is the
 settings app (GTK 4). `SHA256SUMS` lists the checksum of every file.
 
+Every release also has installers that do everything for you:
+
+| Installer | Size | For |
+|---|---|---|
+| `install.sh` = `lsiw-VERSION-online-installer.sh` | ~20 KB | any distribution: picks rpm, deb or AppImage and downloads only what it needs |
+| `lsiw-VERSION-online-installer-rpm.sh` / `-deb.sh` / `-appimage.sh` | ~20 KB | the same, with the format chosen |
+| `lsiw-VERSION-offline-installer.run` | all formats | any distribution, no network needed |
+| `lsiw-VERSION-offline-installer-rpm.run` / `-deb.run` / `-appimage.run` | one format | Fedora & co. / Debian & co. / any distribution, no network needed |
+
+```sh
+sh lsiw-1.8.0-offline-installer-deb.run           # install (same options as install.sh)
+sh lsiw-1.8.0-offline-installer-deb.run --verify  # only check the file
+sh lsiw-1.8.0-offline-installer.run --extract dir # only unpack the packages
+```
+
+Offline installers check their payload and every package against the
+release's checksums and never download anything; the libraries the
+packages depend on (GTK 4, ...) must already be installed (they are on
+most desktops). Wine and GE-Proton are not included.
+
 ### The installer (any distribution)
 
 ```sh
@@ -118,24 +142,44 @@ installs `lsiw` and LSIW Control with Wine, and offers to add LSIW Proton
 to Steam. On a Fedora older than the prebuilt RPMs need it rebuilds them
 from the source RPM. Options: `--format=rpm|deb|appimage`, `--steam`,
 `--ge` (download GE-Proton), `--no-wine`, `--no-control`, `--yes`,
-`--uninstall`; `sh install.sh --help` lists them. Running it again is safe.
+`--version=VERSION|latest`, `--offline`, `--uninstall`;
+`sh install.sh --help` lists them. Running it again is safe.
+
+### Updating
+
+```sh
+lsiw update               # is there a newer release?
+lsiw update install       # download, verify and install it
+lsiw update auto off      # no automatic checks (on by default)
+```
+
+The automatic check runs at most once a day, in the background, after a
+command typed in a terminal and when LSIW Control starts; it only asks
+GitHub where `releases/latest` leads. When a newer release exists you see
+one line (or a banner in LSIW Control); nothing is installed unless you
+ask. `lsiw update install` downloads the new packages for the way LSIW is
+installed (rpm, deb or AppImage), checks each one against the release's
+`SHA256SUMS`, and installs them with sudo (pkexec from LSIW Control); an
+AppImage in a folder you can write to is replaced in place. The checksums
+protect against damaged or altered downloads; they come from the same
+GitHub release, so they are not a signature.
 
 ### Fedora, RHEL, openSUSE (.rpm)
 
 ```sh
-sudo dnf install ./lsiw-1.7.1-1.x86_64.rpm ./lsiw-control-1.7.1-1.x86_64.rpm
+sudo dnf install ./lsiw-1.8.0-1.x86_64.rpm ./lsiw-control-1.8.0-1.x86_64.rpm
 sudo dnf install wine        # optional: the fallback engine
 # openSUSE: sudo zypper install --allow-unsigned-rpm ./lsiw-*.rpm
 ```
 
 The prebuilt RPMs need glibc 2.38 (Fedora 39 or newer). On older systems
-rebuild them: `rpmbuild --rebuild lsiw-1.7.1-1.src.rpm` (or let
+rebuild them: `rpmbuild --rebuild lsiw-1.8.0-1.src.rpm` (or let
 `install.sh` do it).
 
 ### Debian, Ubuntu, Mint (.deb)
 
 ```sh
-sudo apt install ./lsiw_1.7.1-1_amd64.deb ./lsiw-control_1.7.1-1_amd64.deb
+sudo apt install ./lsiw_1.8.0-1_amd64.deb ./lsiw-control_1.8.0-1_amd64.deb
 ```
 
 `lsiw` runs on Debian 11, Ubuntu 20.04 and newer. LSIW Control needs GTK
@@ -146,10 +190,10 @@ install `lsiw_*.deb` alone and use the command line. Remove with
 ### Any distribution (.AppImage)
 
 ```sh
-chmod +x LSIW-1.7.1-x86_64.AppImage
-./LSIW-1.7.1-x86_64.AppImage                      # opens LSIW Control
-./LSIW-1.7.1-x86_64.AppImage run setup.exe        # any lsiw command
-ln -s "$PWD/LSIW-1.7.1-x86_64.AppImage" ~/.local/bin/lsiw   # a normal `lsiw` command
+chmod +x LSIW-1.8.0-x86_64.AppImage
+./LSIW-1.8.0-x86_64.AppImage                      # opens LSIW Control
+./LSIW-1.8.0-x86_64.AppImage run setup.exe        # any lsiw command
+ln -s "$PWD/LSIW-1.8.0-x86_64.AppImage" ~/.local/bin/lsiw   # a normal `lsiw` command
 ```
 
 The AppImage holds `lsiw`, LSIW Control and the GTK 4 libraries, so it
@@ -270,7 +314,7 @@ without `%`. Aliases set the variable they stand for (`APPDATA` and
 
 ```sh
 lsiw path win /etc/hosts                 # C:\etc\hosts
-lsiw path linux 'D:\data\file.txt'       # /data/file.txt (every drive is C:)
+lsiw path linux 'D:\data\file.txt'       # the D: folder's data/file.txt, or /data/file.txt without a D:
 lsiw path linux '%USERPROFILE%\Desktop'  # the Linux folder behind it
 lsiw path expand '%APPDATA%\App'         # C:\users\me\AppData\Roaming\App
 ```
@@ -300,8 +344,25 @@ Every engine sees this folder as `C:\`: LSIW's own engine, Wine
 (`dosdevices/c:`) and Proton (the shared prefix's `drive_c` is a link to
 it). Moving it moves what is in it; across disks the files are copied and
 the original is kept as `<old>.old` until you delete it. The old place
-becomes a link to the new one. The LSIW Control page *C: drive* does the
+becomes a link to the new one. The LSIW Control page *Drives* does the
 same with *Change location…*.
+
+### `lsiw drives`: folders as D:, E:, ...
+
+```sh
+lsiw drives                         # C: and the other drives
+lsiw drives add D ~/Games           # ~/Games is D:\
+lsiw drives add E /run/media/me/USB # a USB stick as E:
+lsiw drives remove D                # D: is gone; the folder stays
+```
+
+Each drive is `[drives] d = FOLDER` in the configuration (`${HOME}` and the
+other tokens work). LSIW's engine sees the folder as `D:\`
+(`GetLogicalDrives`, `GetDriveType`, volume label = the folder's name),
+Wine and Proton get `dosdevices/d:` in their prefix, and Steam's runtime
+container is told about the folder. A Linux path inside a drive folder is
+shown to programs as that drive (`~/Games/x` is `D:\x`). The *Drives* page
+of LSIW Control lists, adds, changes and removes them.
 
 ### `lsiw prefix`: the shared prefix
 
@@ -478,7 +539,7 @@ LSIW_VERBOSE=1 lsiw tool.exe    # the same as --verbose, through the environment
 ## The C: drive
 
 `C:\` is one folder, `~/.cdrive` unless you choose another (`lsiw cdrive
-set`, or the *C: drive* page). It holds a link to every top-level Linux
+set`, or the *Drives* page). It holds a link to every top-level Linux
 folder and to the Windows folders below; anything a program creates right
 under `C:\` (`C:\Games`, say) is a real folder in it.
 
@@ -493,7 +554,8 @@ you moved elsewhere stays where it is.
 | `C:\home\me\notes.txt`               | `/home/me/notes.txt`                             |
 | `C:\run\media\me\USB\photo.jpg`      | `/run/media/me/USB/photo.jpg` (a USB stick)      |
 | `C:\mnt\data`                        | `/mnt/data` (a second disk)                      |
-| `D:\setup.exe`, `E:\x`               | `C:\setup.exe`, `C:\x`: every drive letter means C: |
+| `D:\setup.exe`                       | the D: folder's `setup.exe` (`lsiw drives add D FOLDER`) |
+| `Q:\x` (a letter that is no drive)   | `C:\x`: such a letter means C:                    |
 | `C:\windows`                         | `WINDIR` (default `~/Windows`)                    |
 | `C:\Program Files`                   | `PROGRAMFILES` (default `~/Program Files`)        |
 | `C:\Program Files (x86)`             | `PROGRAMFILES(X86)` (default `~/Program Files (x86)`) |
@@ -547,6 +609,8 @@ COMPUTERNAME = WORKSTATION
 | `[engine] proton`          | version ID or Proton folder    | newest official Proton in Steam | Proton version of the proton engine |
 | `[steam] full_c_drive`     | `true`, `false`                | `true`  | `C:\` in Proton prefixes shows the whole Linux filesystem |
 | `[steam] root`             | folder                         | found automatically | Steam installation |
+| `[drives] d` ... `[drives] z` | folder                    | none    | that folder is the drive `D:` ... `Z:` (`lsiw drives`) |
+| `[update] check`           | `true`, `false`                | `true`  | look for a new release once a day (`lsiw update auto`) |
 | `[runtime] translate_args` | `true`, `false`                | `true`  | pass existing absolute Linux paths in arguments as `C:\` paths |
 | `[variables] NAME`         | Linux path (or value)          | per variable | where a Windows folder lives (`lsiw config list`) |
 

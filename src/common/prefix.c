@@ -25,6 +25,7 @@
 #endif
 #include "lsiw.h"
 #include <dirent.h>
+#include <stdint.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -525,5 +526,155 @@ int lsiw_prefix_link_drive(const char *compat, int verbose)
 out:
     free(drive);
     free(pfx);
+    if (rc == 0) lsiw_prefix_link_drives(compat, verbose);
+    return rc;
+}
+
+/* ------------------------------------------------------------------ */
+/* Extra drives (D:, E:, ...)                                           */
+/* ------------------------------------------------------------------ */
+
+/* [drives] d = /home/me/Games makes that folder D:\ for every engine. The
+ * key is the lower-case letter; any letter but C can be used. */
+static int drive_index(int letter)
+{
+    if (letter >= 'a' && letter <= 'z') letter -= 'a' - 'A';
+    if (letter < 'A' || letter > 'Z' || letter == 'C') return -1;
+    return letter - 'A';
+}
+
+const char *lsiw_drive_setting(int letter)
+{
+    int i = drive_index(letter);
+    if (i < 0) return NULL;
+    char key[2] = { (char)('a' + i), 0 };
+    const char *v = lsiw_setting_get("drives", key, NULL);
+    return v && *v ? v : NULL;
+}
+
+const char *lsiw_drive_path(int letter)
+{
+    if (letter == 'C' || letter == 'c') return lsiw_root_dir();
+    int i = drive_index(letter);
+    if (i < 0) return NULL;
+    /* Old strings are kept, like cached_folder(): the native engine's
+     * threads may still be using them. */
+    static struct cached c[26];
+    const char *v = lsiw_drive_setting(letter);
+    if (!v || strstr(v, "${ROOT}")) return NULL;
+    if (c[i].val && c[i].src && !strcmp(c[i].src, v)) return c[i].val;
+    char *val = folder_value(v);
+    if (!val || !strcmp(val, "/")) { free(val); return NULL; }
+    c[i].src = strdup(v);
+    c[i].val = val;
+    return val;
+}
+
+uint32_t lsiw_drive_mask(void)
+{
+    uint32_t m = 1u << 2;
+    for (int l = 'A'; l <= 'Z'; l++)
+        if (l != 'C' && lsiw_drive_path(l)) m |= 1u << (l - 'A');
+    return m;
+}
+
+int lsiw_drive_set(int letter, const char *path)
+{
+    int i = drive_index(letter);
+    if (i < 0) return -1;
+    char key[2] = { (char)('a' + i), 0 };
+    if (!path || !*path) { lsiw_setting_set("drives", key, NULL); return 0; }
+    char *val = folder_value(path);
+    if (!val || !strcmp(val, "/")) { free(val); return -2; }
+    free(val);
+    /* "~/Games" is kept as "${HOME}/Games", which also works for the
+     * system-wide configuration. */
+    char *store = path[0] == '~' ? lsiw_strdup_printf("${HOME}%s", path + 1) : strdup(path);
+    size_t l = strlen(store);
+    while (l > 1 && store[l - 1] == '/') store[--l] = 0;
+    lsiw_setting_set("drives", key, store);
+    free(store);
+    return 0;
+}
+
+int lsiw_drive_for_linux(const char *abs, size_t *len)
+{
+    int best = 0;
+    size_t bl = 0;
+    for (int l = 'A'; l <= 'Z'; l++) {
+        if (l == 'C') continue;
+        const char *p = lsiw_drive_path(l);
+        if (!p) continue;
+        size_t pl = strlen(p);
+        if (!strncmp(abs, p, pl) && (abs[pl] == 0 || abs[pl] == '/') && pl > bl) { best = l; bl = pl; }
+    }
+    if (len) *len = bl;
+    return best;
+}
+
+#define DRIVES_FILE ".lsiw-drives"
+
+int lsiw_prefix_link_drives(const char *compat, int verbose)
+{
+    char *dd = lsiw_strdup_printf("%s/pfx/dosdevices", compat);
+    char *mark = lsiw_strdup_printf("%s/" DRIVES_FILE, compat);
+    int rc = 0;
+    if (lsiw_mkdirs(dd, 0755) < 0) {
+        lsiw_log("cannot create %s: %s\n", dd, strerror(errno));
+        free(dd); free(mark);
+        return -1;
+    }
+    /* Letters LSIW linked before that are no longer drives. */
+    char *old = lsiw_read_text(mark);
+    for (char *o = old; o && *o; o++) {
+        if (*o < 'a' || *o > 'z' || lsiw_drive_path(*o)) continue;
+        char *link = lsiw_strdup_printf("%s/%c:", dd, *o);
+        struct stat st;
+        if (lstat(link, &st) == 0 && S_ISLNK(st.st_mode) && unlink(link) == 0 && verbose)
+            lsiw_log("removed drive %c:\n", *o - 'a' + 'A');
+        free(link);
+    }
+    free(old);
+    char made[27];
+    size_t n = 0;
+    for (int l = 'a'; l <= 'z'; l++) {
+        if (l == 'c') continue;
+        const char *target = lsiw_drive_path(l);
+        if (!target) continue;
+        lsiw_mkdirs(target, 0755);
+        char *link = lsiw_strdup_printf("%s/%c:", dd, l);
+        char cur[PATH_MAX];
+        ssize_t cl = readlink(link, cur, sizeof cur - 1);
+        struct stat st;
+        if (cl >= 0) {
+            cur[cl] = 0;
+            if (strcmp(cur, target)) unlink(link);
+        } else if (lstat(link, &st) == 0) {
+            lsiw_log("%s is not a symbolic link; leaving it alone, so %c: is not %s\n", link, l - 'a' + 'A', target);
+            rc = -1;
+            free(link);
+            continue;
+        }
+        if ((cl < 0 || strcmp(cur, target)) && symlink(target, link) < 0) {
+            lsiw_log("cannot create %s: %s\n", link, strerror(errno));
+            rc = -1;
+        } else {
+            made[n++] = (char)l;
+            if (verbose && (cl < 0 || strcmp(cur, target))) lsiw_log("drive %c: -> %s\n", l - 'a' + 'A', target);
+        }
+        /* A raw device entry (d:: -> /dev/sr0) would make Wine treat the
+         * folder as that disc. */
+        char *raw = lsiw_strdup_printf("%s::", link);
+        if (lstat(raw, &st) == 0 && S_ISLNK(st.st_mode)) unlink(raw);
+        free(raw);
+        free(link);
+    }
+    made[n] = 0;
+    if (n) {
+        FILE *f = fopen(mark, "w");
+        if (f) { fprintf(f, "%s\n", made); fclose(f); }
+    } else unlink(mark);
+    free(dd);
+    free(mark);
     return rc;
 }

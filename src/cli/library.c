@@ -1,4 +1,5 @@
-/* lsiw cdrive, lsiw prefix and lsiw programs: where C: is, the shared
+/* lsiw cdrive, lsiw drives, lsiw prefix and lsiw programs: where C: is,
+ * the extra drives (D:, E:, ...), the shared
  * prefix, and the library of Windows programs and games with their own
  * settings (engine, prefix, DXVK/VKD3D, arguments, environment, MangoHud,
  * debug logs, desktop shortcut).
@@ -80,6 +81,91 @@ int lsiw_cmd_cdrive(int argc, char **argv)
     if (lsiw_cdrive_move(path, folders, 1) < 0) return 1;
     printf("C: drive: %s\n", lsiw_root_dir());
     return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* lsiw drives                                                          */
+/* ------------------------------------------------------------------ */
+
+const char lsiw_help_drives[] =
+    "Usage: lsiw drives [list]\n"
+    "       lsiw drives add LETTER FOLDER\n"
+    "       lsiw drives remove LETTER\n"
+    "\n"
+    "Besides C:, any Linux folder can be a drive of its own: after\n"
+    "'lsiw drives add D ~/Games', D:\\ is ~/Games for LSIW's native engine, for\n"
+    "Wine and for Proton (Steam games included). Any letter but C can be used\n"
+    "(A to Z, 'D', 'd' or 'D:'). A folder that does not exist yet is created.\n"
+    "The settings are [drives] d = FOLDER in the configuration.\n"
+    "\n"
+    "  list     C: and every extra drive (default)\n"
+    "  add      make FOLDER the drive LETTER (replaces what LETTER was)\n"
+    "  remove   LETTER is no drive any more (the folder itself is kept)\n";
+
+static int drive_letter(const char *a)
+{
+    if (!a || !isalpha((unsigned char)a[0]) || (a[1] && (a[1] != ':' || a[2]))) return 0;
+    return toupper((unsigned char)a[0]);
+}
+
+static void drives_apply(void)
+{
+    /* The shared prefix's dosdevices now; Wine and Proton prefixes of
+     * programs follow when they next start. */
+    lsiw_prefix_link_drives(lsiw_shared_dir(), 0);
+}
+
+int lsiw_cmd_drives(int argc, char **argv)
+{
+    const char *sub = argc > 1 ? argv[1] : "list";
+    if (is_help(sub)) { fputs(lsiw_help_drives, stdout); return 0; }
+    if (!strcmp(sub, "list") || !strcmp(sub, "show")) {
+        printf("C:  %s%s\n", lsiw_root_dir(), lsiw_cdrive_setting() ? "" : " (default; move it with 'lsiw cdrive set')");
+        for (int l = 'A'; l <= 'Z'; l++) {
+            const char *p = l == 'C' ? NULL : lsiw_drive_path(l);
+            if (!p) continue;
+            printf("%c:  %s%s\n", l, p, is_dir(p) ? "" : " (does not exist yet)");
+        }
+        return 0;
+    }
+    if (!strcmp(sub, "add") || !strcmp(sub, "set")) {
+        if (argc != 4) { lsiw_log("usage: lsiw drives add LETTER FOLDER\n"); return 2; }
+        int l = drive_letter(argv[2]);
+        if (!l || l == 'C') {
+            lsiw_log("'%s' is not a drive letter LSIW can use (A to Z, but not C: move C: with 'lsiw cdrive set')\n", argv[2]);
+            return 2;
+        }
+        const char *path = argv[3];
+        char *abs = NULL;
+        if (path[0] != '/' && path[0] != '~' && path[0] != '$') {
+            char cwd[4096];
+            if (!getcwd(cwd, sizeof cwd)) strcpy(cwd, "/");
+            abs = lsiw_strdup_printf("%s/%s", cwd, path);
+            path = abs;
+        }
+        int r = lsiw_drive_set(l, path);
+        free(abs);
+        if (r == -2) { lsiw_log("'%s' is not a folder LSIW can use as a drive\n", argv[3]); return 2; }
+        const char *p = lsiw_drive_path(l);
+        if (p && lsiw_mkdirs(p, 0755) < 0) lsiw_log("warning: cannot create %s: %s\n", p, strerror(errno));
+        if (save()) return 1;
+        drives_apply();
+        printf("%c: is now %s\n", l, p ? p : argv[3]);
+        return 0;
+    }
+    if (!strcmp(sub, "remove") || !strcmp(sub, "rm")) {
+        if (argc != 3) { lsiw_log("usage: lsiw drives remove LETTER\n"); return 2; }
+        int l = drive_letter(argv[2]);
+        if (!l || l == 'C') { lsiw_log("'%s' is not an extra drive\n", argv[2]); return 2; }
+        if (!lsiw_drive_setting(l)) { lsiw_log("%c: is not a drive\n", l); return 1; }
+        lsiw_drive_set(l, NULL);
+        if (save()) return 1;
+        drives_apply();
+        printf("%c: removed (its folder is kept)\n", l);
+        return 0;
+    }
+    lsiw_log("unknown subcommand 'drives %s' (try 'lsiw drives --help')\n", sub);
+    return 2;
 }
 
 /* ------------------------------------------------------------------ */

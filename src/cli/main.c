@@ -77,6 +77,8 @@ static const char help_main[] =
     "  unregister [--user|--system]    undo 'register'\n"
     "  wine-setup                      create or refresh the shared prefix for Wine\n"
     "  cdrive [show|set PATH|reset]    where the C: drive is\n"
+    "  drives [list|add L DIR|remove L] folders that are drives D:, E:, ...\n"
+    "  update [check|install|auto ...] find and install a newer LSIW\n"
     "  prefix [status]                 the shared prefix and the prefixes of programs\n"
     "  programs [list|add|set|run|...] the library of Windows programs and games\n"
     "  lnk LINK.lnk | lnk create ...   show or make a Windows shortcut\n"
@@ -1701,7 +1703,9 @@ static int cmd_wine_setup(int argc, char **argv)
     if (!quiet) {
         printf("Wine prefix:  %s\n", lsiw_prefix_dir());
         printf("Wine:         %s\n", lsiw_wine_binary());   /* setup may have switched it */
-        printf("Drive C:      %s (with every Linux folder; no other drive letters)\n", lsiw_root_dir());
+        printf("Drive C:      %s (with every Linux folder)\n", lsiw_root_dir());
+        for (int l = 'A'; l <= 'Z'; l++)
+            if (l != 'C' && lsiw_drive_path(l)) printf("Drive %c:      %s\n", l, lsiw_drive_path(l));
         printf("Registry:     shell folders, Program Files and TEMP point at LSIW's folders\n");
     }
     return 0;
@@ -1733,6 +1737,8 @@ static const struct command {
     { "runners",    lsiw_cmd_runners, lsiw_help_runners },
     { "steam",      lsiw_cmd_steam, lsiw_help_steam },
     { "cdrive",     lsiw_cmd_cdrive, lsiw_help_cdrive },
+    { "drives",     lsiw_cmd_drives, lsiw_help_drives },
+    { "update",     lsiw_cmd_update, lsiw_help_update },
     { "prefix",     lsiw_cmd_prefix, lsiw_help_prefix },
     { "programs",   lsiw_cmd_programs, lsiw_help_programs },
     { "steam-run",  lsiw_cmd_steam_run, lsiw_help_steam },
@@ -1814,7 +1820,17 @@ int main(int argc, char **argv)
     }
 
     const struct command *c = find_command(argv[i]);
-    if (c) return c->fn(argc - i, argv + i);
+    if (c) {
+        int rc = c->fn(argc - i, argv + i);
+        /* Not after commands whose output scripts read, or that run
+         * programs (their output is the program's). */
+        static const char *const quiet[] = { "run", "launch", "steam-run", "update", "path", "lwlnk",
+                                             "lnk", "check", NULL };
+        int notice = 1;
+        for (int q = 0; quiet[q]; q++) if (!strcmp(c->name, quiet[q])) notice = 0;
+        if (notice) lsiw_update_notice();
+        return rc;
+    }
     if (lsiw_cli_has_ext(argv[i], ".lwlnk")) return lsiw_launch_lwlnk(argv[i], argc - i - 1, argv + i + 1);
     /* Anything path-like is a program too: run reports a missing file. */
     if (looks_like_program(argv[i]) || strchr(argv[i], '/') || strchr(argv[i], '\\') ||

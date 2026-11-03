@@ -18,7 +18,7 @@
 %global lsiw_make_vars GUI=yes CC="%{__cc}" CFLAGS="%{build_cflags}" LDFLAGS="%{build_ldflags}" PREFIX=%{_prefix} BINDIR=%{_bindir} LIBEXECDIR=%{_libexecdir} DATADIR=%{_datadir} SYSCONFDIR=%{_sysconfdir} BINFMTDIR=%{_binfmtdir} TMPFILESDIR=%{_tmpfilesdir} METAINFODIR=%{_metainfodir}
 
 Name:           lsiw
-Version:        1.7.1
+Version:        1.8.0
 Release:        1%{?dist}
 Summary:        Run Windows x86-64 programs on Linux with a native engine
 
@@ -147,6 +147,14 @@ update-desktop-database -q %{_datadir}/applications &>/dev/null || :
 %{_metainfodir}/io.github.lsiw.Control.metainfo.xml
 
 %changelog
+* Tue Nov 03 2026 The LSIW contributors - 1.8.0-1
+- Extra drives: any folder can be D:, E:, ... for the native engine, Wine
+  and Proton ('lsiw drives', the Drives page of LSIW Control)
+- 'lsiw update': daily background check for new releases (can be turned
+  off) and an installer that verifies the release's SHA256SUMS; Updates
+  page and banner in LSIW Control
+- Online and offline installers for every package format
+
 * Mon Nov 02 2026 The LSIW contributors - 1.7.1-1
 - The C: drive is ~/.cdrive by default; an existing ~/c_drive moves there
   once and ~/c_drive becomes a link to it (nothing is deleted)

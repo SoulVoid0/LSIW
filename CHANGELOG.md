@@ -6,6 +6,38 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-11-03
+
+### Added
+
+- **Folders as drives (D:, E:, ...).** `lsiw drives add D ~/Games` makes a
+  folder the drive `D:\` ([drives] d in the configuration), for every
+  engine: LSIW's own (paths keep the letter both ways; `GetLogicalDrives`,
+  `GetLogicalDriveStrings`, `GetDriveType`, `GetVolumeInformation`,
+  `GetVolumePathName` know the drive), Wine (`dosdevices/d:` of the
+  prefix; other letters are still removed) and Proton (`dosdevices/d:` of
+  the shared or the program's own prefix, and the folder is passed to
+  Steam's runtime container). LSIW Control's C: drive page is now
+  *Drives*, with an *Other drives* list to add, change, open and remove
+  them. A letter that is no drive still means C:. Tests: tests/drives.sh
+  and tests/src/t_drives.c.
+- **Update check and updater.** `lsiw update [check|status|install|auto]`.
+  LSIW asks GitHub for the newest release at most once a day, in the
+  background, after commands typed in a terminal and when LSIW Control
+  starts (off with `lsiw update auto off`, `[update] check = false` or
+  `LSIW_NO_UPDATE_CHECK=1`), and shows one line when one is out.
+  `lsiw update install` downloads the packages of the new release for the
+  installed format, verifies them against its `SHA256SUMS` and installs
+  them (sudo in a terminal, pkexec from LSIW Control; a user-owned
+  AppImage is replaced in place). LSIW Control has an *Updates* page, a
+  *Check for Updates* menu item and a banner when a new version is out.
+- **Online and offline installers** in every release:
+  `lsiw-VERSION-online-installer[-rpm|-deb|-appimage].sh` (download what
+  they need) and `lsiw-VERSION-offline-installer[-rpm|-deb|-appimage].run`
+  (self-extracting, everything inside, verified before installing).
+  `install.sh` has `--offline` and `--version=VERSION|latest`, and finds
+  the desktop user under pkexec too.
+
 ## [1.7.1] - 2026-11-02
 
 ### Added

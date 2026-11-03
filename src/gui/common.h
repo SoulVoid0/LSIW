@@ -41,6 +41,10 @@ GtkWidget *lsiw_page_engine_new(void);
 GtkWidget *lsiw_page_programs_new(void);
 GtkWidget *lsiw_page_integration_new(void);
 GtkWidget *lsiw_page_steam_new(void);
+GtkWidget *lsiw_page_update_new(void);
+/* Show or hide the window's "a new version is available" banner after
+ * the last update check (main.c); `any` is any widget of the window. */
+void lsiw_gui_update_banner(GtkWidget *any);
 
 void lsiw_page_attach(LsiwPage *page, GtkWidget *widget, GDestroyNotify free_page);
 void lsiw_page_refresh(GtkWidget *page_widget, enum lsiw_refresh_reason reason);

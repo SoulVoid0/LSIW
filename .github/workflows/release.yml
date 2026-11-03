@@ -1,6 +1,8 @@
 # Build the release packages of a tag (v1.2.3) and publish them as a GitHub
 # release: .rpm (Fedora, RHEL, openSUSE), .deb (Debian, Ubuntu) and an
-# AppImage (every other distribution), with install.sh and SHA256SUMS.
+# AppImage (every other distribution), online installers (install.sh and
+# one per format) and offline installers (self-extracting .run files),
+# with SHA256SUMS.
 # SPDX-License-Identifier: AGPL-3.0-or-later
 name: release
 
@@ -10,7 +12,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Tag to publish (for example v1.7.1); created on the chosen branch's commit if it does not exist
+        description: Tag to publish (for example v1.8.0); created on the chosen branch's commit if it does not exist
         required: true
 
 permissions:
@@ -114,7 +116,26 @@ jobs:
           find build -maxdepth 2 -name "LSIW-$VERSION-x86_64.AppImage.zsync" -exec cp {} dist/ \;
           make dist && cp lsiw-$VERSION.tar.gz dist/
           cp install.sh dist/
-          (cd dist && sha256sum -- * > SHA256SUMS && cat SHA256SUMS)
+          (cd dist && sha256sum -- * > SHA256SUMS)
+          # Online and offline installers, then the checksums of everything.
+          sh packaging/installer/mkinstallers.sh "$VERSION" dist
+          (cd dist && rm SHA256SUMS && sha256sum -- * > SHA256SUMS.new && mv SHA256SUMS.new SHA256SUMS && cat SHA256SUMS)
+
+      - name: Test the installers
+        timeout-minutes: 10
+        run: |
+          for f in dist/*.run; do sh "$f" --verify; done
+          sh dist/lsiw-$VERSION-offline-installer.run --extract "$RUNNER_TEMP/x"
+          (cd "$RUNNER_TEMP/x" && sha256sum --check --ignore-missing SHA256SUMS)
+          # A real offline install of the .deb packages (the libraries are
+          # already here), then the updater's view of it.
+          sudo apt-get remove -y lsiw-control lsiw
+          sudo sh dist/lsiw-$VERSION-offline-installer-deb.run --yes --no-steam --no-wine
+          lsiw --version
+          dpkg-query -W lsiw lsiw-control
+          LSIW_NO_UPDATE_CHECK=1 lsiw update status --porcelain
+          lsiw update check --porcelain || echo "(the check needs the release to exist)"
+          sh dist/lsiw-$VERSION-online-installer-rpm.sh --help >/dev/null
 
       - uses: actions/upload-artifact@v4
         with:
@@ -148,10 +169,22 @@ jobs:
           | .deb | Debian, Ubuntu, Mint, Pop!_OS | lsiw_$v-1_amd64.deb, lsiw-control_$v-1_amd64.deb |
           | AppImage | any distribution | LSIW-$v-x86_64.AppImage |
 
+          Installers (they check every file against SHA256SUMS):
+
+          | Installer | Network | For |
+          |---|---|---|
+          | install.sh (= lsiw-$v-online-installer.sh) | downloads what it needs | any distribution, picks the format |
+          | lsiw-$v-online-installer-rpm.sh / -deb.sh / -appimage.sh | downloads what it needs | one format |
+          | lsiw-$v-offline-installer.run | none | any distribution, every format inside |
+          | lsiw-$v-offline-installer-rpm.run / -deb.run / -appimage.run | none | one format inside |
+
           Quick install (picks the right format):
 
               curl -fLO https://github.com/$GH_REPO/releases/download/$TAG/install.sh
               sh install.sh
+
+          Offline: copy lsiw-$v-offline-installer.run to the computer and run sh lsiw-$v-offline-installer.run.
+          Already have LSIW 1.8 or newer? lsiw update install, or Updates in LSIW Control.
 
           See the README for per-format instructions and CHANGELOG.md for what changed.
           Checksums: SHA256SUMS.

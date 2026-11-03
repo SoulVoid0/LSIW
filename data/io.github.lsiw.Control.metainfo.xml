@@ -53,6 +53,13 @@
   </supports>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="1.8.0" date="2026-11-03">
+      <description>
+        <p>Any folder can be a drive of its own (D:, E:, ...) for LSIW's engine, Wine and Proton.
+        LSIW checks for new releases once a day (this can be turned off) and LSIW Control can
+        download, verify and install them. Releases now come with online and offline installers.</p>
+      </description>
+    </release>
     <release version="1.7.1" date="2026-11-02">
       <description>
         <p>The C: drive is the hidden folder ~/.cdrive by default. An existing ~/c_drive moves

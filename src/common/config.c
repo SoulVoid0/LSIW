@@ -499,6 +499,23 @@ char *lsiw_linux_to_win(const char *linuxpath)
     const char *prof = linux_of(lsiw_var_find("CSIDL_PROFILE"));
     size_t pl = prof ? strlen(prof) : 0;
     if (pl < 2 || strncmp(abs, prof, pl) || (abs[pl] != 0 && abs[pl] != '/')) pl = 0;
+    /* An extra drive whose folder is closer than all of them: D:\... */
+    size_t dl = 0;
+    int dletter = lsiw_drive_for_linux(abs, &dl);
+    if (dletter && dl > m && dl > rl && dl > pl) {
+        const char *r = abs + dl;
+        char *out = malloc(strlen(r) + 8), *o = out;
+        *o++ = (char)dletter; *o++ = ':'; *o++ = '\\';
+        while (*r == '/') r++;
+        for (; *r; r++) {
+            if (*r == '/') { if (o[-1] != '\\') *o++ = '\\'; }
+            else *o++ = *r;
+        }
+        while (o - out > 3 && o[-1] == '\\') o--;
+        *o = 0;
+        free(abs);
+        return out;
+    }
     if (pl > m && pl > rl) {
         const struct lsiw_var *pf = lsiw_var_find("PROFILESFOLDER");
         profile_anchor = lsiw_strdup_printf("%s\\%s", pf && pf->anchor ? pf->anchor : "users", lsiw_user_name());

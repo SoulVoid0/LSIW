@@ -992,7 +992,7 @@ static HANDLE find_first(const char *win, char *name, struct stat *st)
     char *sep = strrchr(spec, '\\');
     char *pat, *dirw;
     if (sep) { *sep = 0; pat = strdup(sep + 1); dirw = lsiw_strdup_printf("%s\\", spec); }
-    else if (spec[0] && spec[1] == ':') { pat = strdup(spec + 2); dirw = strdup("C:\\"); }
+    else if (spec[0] && spec[1] == ':') { pat = strdup(spec + 2); dirw = lsiw_strdup_printf("%c:\\", spec[0]); }
     else { pat = strdup(spec); dirw = strdup("."); }
     free(spec);
     if (!*pat) { free(pat); pat = strdup("*"); }
@@ -1154,9 +1154,21 @@ static char *full_path(const char *in)
     for (char *c = s; *c; c++) if (*c == '/') *c = '\\';
     if (s[0] == '\\' && s[1] == '\\') return s;                        /* UNC: leave as is */
     if (isalpha((unsigned char)s[0]) && s[1] == ':') {
-        if (s[2] == '\\') base = lsiw_strdup_printf("C:%s", s + 2);
-        else { char *c = cwd_win(); base = lsiw_strdup_printf("%s\\%s", c, s + 2); free(c); }
-    } else if (s[0] == '\\') base = lsiw_strdup_printf("C:%s", s);
+        /* An extra drive keeps its letter; any other letter is C:. */
+        char letter = lsiw_drive_path((unsigned char)s[0]) ? (char)toupper((unsigned char)s[0]) : 'C';
+        char *c = cwd_win();
+        int same = (c[0] & ~0x20) == letter;
+        if (s[2] == '\\') base = lsiw_strdup_printf("%c:%s", letter, s + 2);
+        else if (same) base = lsiw_strdup_printf("%s\\%s", c, s + 2);
+        else base = lsiw_strdup_printf("%c:\\%s", letter, s + 2);
+        free(c);
+    } else if (s[0] == '\\') {
+        /* Rooted: on the current folder's drive. */
+        char *c = cwd_win();
+        char letter = isalpha((unsigned char)c[0]) && c[1] == ':' ? c[0] : 'C';
+        base = lsiw_strdup_printf("%c:%s", letter, s);
+        free(c);
+    }
     else { char *c = cwd_win(); base = lsiw_strdup_printf("%s\\%s", c, s); free(c); }
     free(s);
     /* Normalise components. */
@@ -1170,7 +1182,7 @@ static char *full_path(const char *in)
     }
     size_t cap = strlen(in) + 4096, len = 0;
     char *out = malloc(cap);
-    out[len++] = 'C'; out[len++] = ':'; out[len++] = '\\';
+    out[len++] = base[0]; out[len++] = ':'; out[len++] = '\\';
     for (int i = 0; i < n; i++) {
         size_t cl = strlen(comps[i]);
         if (len + cl + 2 > cap) { cap = (len + cl) * 2; out = realloc(out, cap); }
@@ -1329,34 +1341,82 @@ API DWORD SearchPathW(const WCHAR *path, const WCHAR *file, const WCHAR *ext, DW
 }
 
 /* ================================================================== */
-/* Drives and volumes: there is exactly one drive, C:                   */
+/* Drives and volumes: C: and the extra drives the user configured     */
 /* ================================================================== */
 
-static int is_c_root(const char *root)
+/* The drive letter of a root ("C:", "D:\\"; NULL = the current drive),
+ * upper case, or 0 when it is not the root of a drive that exists. */
+static int drive_root(const char *root)
 {
-    if (!root) return 1;
-    if ((root[0] == 'C' || root[0] == 'c') && root[1] == ':' && (!root[2] || ((root[2] == '\\' || root[2] == '/') && !root[3]))) return 1;
-    return 0;
+    if (!root) {
+        char *c = cwd_win();
+        int l = isalpha((unsigned char)c[0]) && c[1] == ':' ? toupper((unsigned char)c[0]) : 'C';
+        free(c);
+        return l;
+    }
+    if (!isalpha((unsigned char)root[0]) || root[1] != ':') return 0;
+    if (root[2] && !((root[2] == '\\' || root[2] == '/') && !root[3])) return 0;
+    int l = toupper((unsigned char)root[0]);
+    return l == 'C' || lsiw_drive_path(l) ? l : 0;
 }
 
 API UINT GetDriveTypeA(const char *root)
 {
-    if (is_c_root(root)) return 3;                  /* DRIVE_FIXED */
+    int l = drive_root(root);
+    if (l == 'C') return 3;                         /* DRIVE_FIXED */
+    if (l) {
+        /* A folder on a USB stick or a disc counts as removable/CD-ROM. */
+        const char *p = lsiw_drive_path(l);
+        if (p && (!strncmp(p, "/media/", 7) || !strncmp(p, "/run/media/", 11))) return 2;
+        return 3;
+    }
     if (root && root[0] == '\\' && root[1] == '\\') return 4;  /* DRIVE_REMOTE */
     return 1;                                       /* DRIVE_NO_ROOT_DIR */
 }
 API UINT GetDriveTypeW(const WCHAR *root) { char *s = lsiw_w2u(root); UINT r = GetDriveTypeA(s); free(s); return r; }
-API DWORD GetLogicalDrives(void) { return 1u << 2; }
-API DWORD GetLogicalDriveStringsA(DWORD n, char *buf) { if (n < 5) return 5; memcpy(buf, "C:\\\0\0", 5); return 4; }
-API DWORD GetLogicalDriveStringsW(DWORD n, WCHAR *buf) { if (n < 5) return 5; buf[0] = 'C'; buf[1] = ':'; buf[2] = '\\'; buf[3] = 0; buf[4] = 0; return 4; }
+API DWORD GetLogicalDrives(void) { return lsiw_drive_mask(); }
+
+/* "C:\\\0D:\\\0\0" */
+static int drive_strings(char *buf)
+{
+    uint32_t m = lsiw_drive_mask();
+    int n = 0;
+    for (int i = 0; i < 26; i++)
+        if (m & (1u << i)) { buf[n++] = (char)('A' + i); buf[n++] = ':'; buf[n++] = '\\'; buf[n++] = 0; }
+    buf[n] = 0;
+    return n;
+}
+API DWORD GetLogicalDriveStringsA(DWORD n, char *buf)
+{
+    char tmp[26 * 4 + 1];
+    int len = drive_strings(tmp);
+    if (!buf || n < (DWORD)len + 1) return (DWORD)len + 1;
+    memcpy(buf, tmp, (size_t)len + 1);
+    return (DWORD)len;
+}
+API DWORD GetLogicalDriveStringsW(DWORD n, WCHAR *buf)
+{
+    char tmp[26 * 4 + 1];
+    int len = drive_strings(tmp);
+    if (!buf || n < (DWORD)len + 1) return (DWORD)len + 1;
+    for (int i = 0; i <= len; i++) buf[i] = (WCHAR)(unsigned char)tmp[i];
+    return (DWORD)len;
+}
 
 static BOOL volume_info(const char *root, char *label, DWORD ln, DWORD *serial, DWORD *maxlen, DWORD *flags, char *fs, DWORD fsn)
 {
-    if (!is_c_root(root)) { lsiw_set_last_error(ERROR_PATH_NOT_FOUND); return FALSE; }
+    int l = drive_root(root);
+    if (!l) { lsiw_set_last_error(ERROR_PATH_NOT_FOUND); return FALSE; }
+    const char *path = l == 'C' ? "/" : lsiw_drive_path(l);
     struct statvfs sv;
-    statvfs("/", &sv);
-    if (label && ln) snprintf(label, ln, "LSIW");
-    if (serial) *serial = (DWORD)(sv.f_fsid ^ (sv.f_fsid >> 32));
+    if (statvfs(path, &sv) < 0) memset(&sv, 0, sizeof sv);
+    if (label && ln) {
+        /* An extra drive is labelled after its folder. */
+        const char *b = l == 'C' ? "LSIW" : strrchr(path, '/');
+        b = l == 'C' ? b : (b && b[1] ? b + 1 : "LSIW");
+        snprintf(label, ln, "%s", b);
+    }
+    if (serial) *serial = (DWORD)(sv.f_fsid ^ (sv.f_fsid >> 32)) ^ (DWORD)(l == 'C' ? 0 : l * 0x01000193u);
     if (maxlen) *maxlen = 255;
     if (flags) *flags = 0x1 | 0x2 | 0x4 | 0x8 | 0x00400000; /* case sensitive/preserved, unicode, ACLs, hard links */
     if (fs && fsn) snprintf(fs, fsn, "NTFS");
@@ -1364,12 +1424,12 @@ static BOOL volume_info(const char *root, char *label, DWORD ln, DWORD *serial, 
 }
 API BOOL GetVolumeInformationA(const char *root, char *label, DWORD ln, DWORD *serial, DWORD *maxlen, DWORD *flags, char *fs, DWORD fsn)
 { return volume_info(root, label, ln, serial, maxlen, flags, fs, fsn); }
-/* The C: drive is the Linux filesystem: its label is not LSIW's to change. */
+/* The drives are Linux folders: their labels are not LSIW's to change. */
 API BOOL SetVolumeLabelA(const char *root, const char *label) { (void)root; (void)label; lsiw_set_last_error(ERROR_ACCESS_DENIED); return FALSE; }
 API BOOL SetVolumeLabelW(const WCHAR *root, const WCHAR *label) { (void)root; (void)label; lsiw_set_last_error(ERROR_ACCESS_DENIED); return FALSE; }
 API BOOL GetVolumeInformationW(const WCHAR *root, WCHAR *label, DWORD ln, DWORD *serial, DWORD *maxlen, DWORD *flags, WCHAR *fs, DWORD fsn)
 {
-    char *r = lsiw_w2u(root), l[64], f[64];
+    char *r = lsiw_w2u(root), l[256], f[64];
     BOOL ok = volume_info(r, l, sizeof l, serial, maxlen, flags, f, sizeof f);
     free(r);
     if (ok && label && ln) lsiw_utf8_to_utf16(l, -1, label, (int)ln);
@@ -1378,8 +1438,24 @@ API BOOL GetVolumeInformationW(const WCHAR *root, WCHAR *label, DWORD ln, DWORD 
 }
 API BOOL GetVolumeInformationByHandleW(HANDLE h, WCHAR *label, DWORD ln, DWORD *serial, DWORD *maxlen, DWORD *flags, WCHAR *fs, DWORD fsn)
 { (void)h; return GetVolumeInformationW(NULL, label, ln, serial, maxlen, flags, fs, fsn); }
-API BOOL GetVolumePathNameA(const char *p, char *out, DWORD n) { (void)p; if (n < 4) return FALSE; strcpy(out, "C:\\"); return TRUE; }
-API BOOL GetVolumePathNameW(const WCHAR *p, WCHAR *out, DWORD n) { (void)p; if (n < 4) return FALSE; out[0] = 'C'; out[1] = ':'; out[2] = '\\'; out[3] = 0; return TRUE; }
+/* The drive a path is on: "D:\\" for an extra drive, else "C:\\". */
+static char volume_letter(const char *p)
+{
+    if (!p) return 'C';
+    char *f = full_path(p);
+    char l = isalpha((unsigned char)f[0]) && f[1] == ':' ? (char)toupper((unsigned char)f[0]) : 'C';
+    free(f);
+    return l;
+}
+API BOOL GetVolumePathNameA(const char *p, char *out, DWORD n) { if (n < 4) return FALSE; out[0] = volume_letter(p); strcpy(out + 1, ":\\"); return TRUE; }
+API BOOL GetVolumePathNameW(const WCHAR *p, WCHAR *out, DWORD n)
+{
+    if (n < 4) return FALSE;
+    char *s = p ? lsiw_w2u(p) : NULL;
+    out[0] = (WCHAR)volume_letter(s); out[1] = ':'; out[2] = '\\'; out[3] = 0;
+    free(s);
+    return TRUE;
+}
 API BOOL GetVolumeNameForVolumeMountPointW(const WCHAR *m, WCHAR *out, DWORD n)
 {
     (void)m;

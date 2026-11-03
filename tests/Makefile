@@ -41,7 +41,7 @@ HAVE_MSVC     := $(if $(and $(CLANG_CL),$(LLD_LINK),$(DLLTOOL)),yes)
 MINGW_INC = $(shell for d in $$($(MINGW_CC) -xc -E -v - </dev/null 2>&1 | sed -n '/search starts here/,/End of search/p' | grep '^ '); do \
                 [ -f "$$d/windows.h" ] && echo "$$d"; done | head -n1)
 
-C_TESTS := t_crt t_files t_env t_threads t_seh t_process t_registry t_net
+C_TESTS := t_crt t_files t_env t_threads t_seh t_process t_registry t_net t_drives
 LIBS_t_env      := -lshell32 -ladvapi32
 LIBS_t_registry := -ladvapi32
 LIBS_t_net      := -lws2_32

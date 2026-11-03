@@ -4,9 +4,12 @@
 #     sh install.sh                # install LSIW and LSIW Control
 #     sh install.sh --help         # options
 #
-# Run it from a folder with the release files, or on its own: files that
-# are not next to it are downloaded from the GitHub release
-# (https://github.com/SoulVoid0/LSIW/releases).
+# This is the online installer: run it from a folder with the release
+# files, or on its own, and the files that are not next to it are
+# downloaded from the GitHub release
+# (https://github.com/SoulVoid0/LSIW/releases). The offline installers
+# (lsiw-VERSION-offline-installer*.run) carry the files inside and run this
+# script with --offline.
 #
 # It picks the package format that fits the system:
 #   rpm       Fedora, RHEL/CentOS/Alma/Rocky, openSUSE (dnf or zypper); on a
@@ -29,7 +32,7 @@
 
 set -eu
 
-LSIW_VERSION=1.7.1
+LSIW_VERSION=1.8.0
 LSIW_RELEASE=1
 LSIW_REPO=SoulVoid0/LSIW
 
@@ -43,6 +46,10 @@ downloads them from https://github.com/$LSIW_REPO/releases.
 Options:
   -y, --yes         answer yes to every question
       --format=FMT  rpm, deb or appimage (default: the one for this system)
+      --version=V   install release V instead of $LSIW_VERSION ("latest": the
+                    newest release)
+      --offline     never download anything: use only the files next to
+                    this script and packages already on the system
       --no-control  do not install LSIW Control (the settings app)
       --no-wine     do not install Wine (the fallback engine)
       --steam       add "LSIW Proton" to Steam (default: ask)
@@ -55,10 +62,15 @@ Options:
 EOF
 }
 
-YES=0 CONTROL=1 WINE=1 STEAM=ask GE=0 REBUILD=0 UNINSTALL=0 FORMAT=
+YES=0 CONTROL=1 WINE=1 STEAM=ask GE=0 REBUILD=0 UNINSTALL=0 OFFLINE=0 UPDATE=0
+FORMAT=${LSIW_INSTALL_FORMAT:-} WANT_VERSION=
 while [ $# -gt 0 ]; do
     case $1 in
         -y|--yes) YES=1 ;;
+        --offline) OFFLINE=1 ;;
+        --update) UPDATE=1 YES=1 ;;      # run by 'lsiw update install'
+        --version=*) WANT_VERSION=${1#--version=} ;;
+        --version) shift; WANT_VERSION=${1-} ;;
         --format=*) FORMAT=${1#--format=} ;;
         --format) shift; FORMAT=${1-} ;;
         --no-control) CONTROL=0 ;;
@@ -78,7 +90,11 @@ case $FORMAT in
     *) echo "install.sh: --format must be rpm, deb or appimage" >&2; exit 2 ;;
 esac
 
-say()  { printf '\033[1m==> %s\033[0m\n' "$*"; }
+if [ -t 1 ]; then
+    say()  { printf '\033[1m==> %s\033[0m\n' "$*"; }
+else
+    say()  { printf '==> %s\n' "$*"; }
+fi
 warn() { printf 'install.sh: warning: %s\n' "$*" >&2; }
 die()  { printf 'install.sh: %s\n' "$*" >&2; exit 1; }
 
@@ -89,6 +105,22 @@ ask() {     # ask "Question?" -> 0 for yes
     read -r answer || return 1
     case $answer in [yY]|[yY][eE][sS]) return 0 ;; *) return 1 ;; esac
 }
+
+# Another release than the one this script belongs to.
+case $WANT_VERSION in
+    "") ;;
+    latest)
+        [ "$OFFLINE" = 0 ] || die "--version=latest needs the network (not --offline)"
+        command -v curl >/dev/null 2>&1 || die "--version=latest needs curl"
+        url=$(curl -fsS --proto =https -o /dev/null -w '%{redirect_url}' \
+              "https://github.com/$LSIW_REPO/releases/latest") || die "cannot reach GitHub to find the newest release"
+        LSIW_VERSION=${url##*/tag/v}
+        ;;
+    *) LSIW_VERSION=${WANT_VERSION#v} ;;
+esac
+case $LSIW_VERSION in
+    ""|*[!0-9.]*) die "'$LSIW_VERSION' is not a version" ;;
+esac
 
 glibc_version() { getconf GNU_LIBC_VERSION 2>/dev/null | sed 's/^glibc //'; }
 version_ge() {   # version_ge A B -> 0 when A >= B
@@ -137,8 +169,11 @@ esac
 
 if [ "$(id -u)" = 0 ]; then
     SUDO=
-    # The user to set Steam up for: the one who ran sudo, if any.
+    # The user to set Steam up for: the one who ran sudo or pkexec, if any.
     DESKTOP_USER=${SUDO_USER:-}
+    if [ -z "$DESKTOP_USER" ] && [ -n "${PKEXEC_UID:-}" ]; then
+        DESKTOP_USER=$(id -un "$PKEXEC_UID" 2>/dev/null || :)
+    fi
 else
     have sudo || die "run this as root, or install sudo"
     SUDO=sudo
@@ -234,6 +269,7 @@ missing=
 for f in SHA256SUMS $files; do [ -f "$f" ] || missing="$missing $f"; done
 if [ -n "$missing" ]; then
     # Not next to this script: download them from the GitHub release.
+    [ "$OFFLINE" = 0 ] || die "missing release files:$missing (this installer runs offline; use the online installer, install.sh, to download them)"
     have curl || have wget || die "missing release files:$missing (install curl or wget to download them)"
     tempdir release; DL=$TMP
     base=https://github.com/$LSIW_REPO/releases/download/v$LSIW_VERSION
@@ -262,6 +298,15 @@ echo "All checksums match."
 # 2. Packages
 # ------------------------------------------------------------------
 
+# A package tool failed: offline, that usually means a dependency (GTK 4,
+# ...) is not installed yet.
+offline_hint() {
+    if [ "$OFFLINE" = 1 ]; then
+        die "the packages could not be installed without the network; a library they need is probably missing. Connect to the network and run the online installer (install.sh), or install the missing packages first"
+    fi
+    die "the packages could not be installed"
+}
+
 install_rpm() {
     # The prebuilt RPMs need the C library they were built against.
     glibc_have=$(rpm -q --qf '%{VERSION}' glibc 2>/dev/null || echo 0)
@@ -274,7 +319,10 @@ install_rpm() {
         else
             say "This system's C library ($glibc_have) is older than the prebuilt RPMs need ($glibc_need): building them from the source RPM"
         fi
-        if [ "$PKGTOOL" = dnf ]; then
+        [ "$OFFLINE" = 0 ] || warn "offline: the build tools must already be installed"
+        if [ "$OFFLINE" = 1 ]; then
+            :
+        elif [ "$PKGTOOL" = dnf ]; then
             $SUDO "$DNF" install -y rpm-build gcc make gtk4-devel pkgconfig desktop-file-utils \
                 libappstream-glib systemd-rpm-macros
         else
@@ -306,9 +354,12 @@ install_rpm() {
         *) say "Upgrading LSIW $installed to $LSIW_VERSION-$LSIW_RELEASE" ;;
     esac
     if [ "$PKGTOOL" = zypper ]; then
+        norefresh=
+        [ "$OFFLINE" = 1 ] && norefresh=--no-refresh
         # shellcheck disable=SC2086
-        $SUDO zypper --non-interactive install --allow-unsigned-rpm $pkgs
-        if [ "$WINE" = 1 ] && ! have wine; then
+        $SUDO zypper --non-interactive $norefresh install --allow-unsigned-rpm $pkgs ||
+            offline_hint
+        if [ "$OFFLINE" = 0 ] && [ "$WINE" = 1 ] && ! have wine; then
             say "Installing Wine (the fallback engine)"
             $SUDO zypper --non-interactive install wine || warn "Wine could not be installed; LSIW's own engine still works"
         fi
@@ -316,9 +367,14 @@ install_rpm() {
     fi
     weak=
     [ "$WINE" = 0 ] && weak=--setopt=install_weak_deps=False
-    # shellcheck disable=SC2086
-    $SUDO "$DNF" install -y $weak $pkgs
-    if [ "$WINE" = 1 ] && ! have wine; then
+    if [ "$OFFLINE" = 1 ]; then
+        # shellcheck disable=SC2086
+        $SUDO "$DNF" install -y --setopt=install_weak_deps=False --disablerepo='*' $pkgs || offline_hint
+    else
+        # shellcheck disable=SC2086
+        $SUDO "$DNF" install -y $weak $pkgs || offline_hint
+    fi
+    if [ "$OFFLINE" = 0 ] && [ "$WINE" = 1 ] && ! have wine; then
         say "Installing Wine (the fallback engine)"
         $SUDO "$DNF" install -y wine || warn "Wine could not be installed; LSIW's own engine still works"
     fi
@@ -327,20 +383,24 @@ install_rpm() {
 install_deb() {
     # The lsiw command needs glibc 2.30 (Ubuntu 20.04, Debian 11); LSIW
     # Control needs GTK 4.12 and glibc 2.38 (Ubuntu 24.04, Debian 13).
-    pkgs="./$BIN_DEB"
+    pkgs="$HERE/$BIN_DEB"
     if [ "$CONTROL" = 1 ]; then
         if version_ge "$(glibc_version)" 2.38; then
-            pkgs="$pkgs ./$CONTROL_DEB"
+            pkgs="$pkgs $HERE/$CONTROL_DEB"
         else
             warn "LSIW Control needs Ubuntu 24.04, Debian 13 or newer (glibc 2.38, GTK 4.12); installing the lsiw command only"
             CONTROL=0
         fi
     fi
     rec=--no-install-recommends
-    [ "$WINE" = 1 ] && rec=
-    $SUDO apt-get update -qq || warn "apt-get update failed; using the package lists as they are"
+    [ "$WINE" = 1 ] && [ "$OFFLINE" = 0 ] && rec=
+    # Offline, apt needs no download when every library is installed
+    # already (and fails with the hint below when one is missing).
+    if [ "$OFFLINE" = 0 ]; then
+        $SUDO apt-get update -qq || warn "apt-get update failed; using the package lists as they are"
+    fi
     # shellcheck disable=SC2086
-    $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y $rec $pkgs
+    $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y $rec $pkgs || offline_hint
 }
 
 install_appimage() {
@@ -351,6 +411,10 @@ install_appimage() {
         /usr/local/share/icons/hicolor/scalable/apps
     $SUDO install -m 0755 "$APPIMAGE" "$OPT/$APPIMAGE"
     $SUDO ln -sfn "$APPIMAGE" "$OPT/LSIW.AppImage"
+    # Older versions are not needed any more.
+    for old in "$OPT"/LSIW-*-x86_64.AppImage; do
+        [ -f "$old" ] && [ "$old" != "$OPT/$APPIMAGE" ] && $SUDO rm -f "$old"
+    done
     # The AppImage runs lsiw or LSIW Control by the name it is started as.
     $SUDO ln -sfn "$OPT/LSIW.AppImage" /usr/local/bin/lsiw
     $SUDO ln -sfn "$OPT/LSIW.AppImage" /usr/local/bin/lsiw-control
@@ -401,6 +465,10 @@ if [ -n "$DESKTOP_USER" ] && [ "$DESKTOP_USER" != "$(id -un)" ]; then
     done
 fi
 
+if [ "$GE" = 1 ] && [ "$OFFLINE" = 1 ]; then
+    warn "offline: GE-Proton is not downloaded (run 'lsiw runners install ge' later)"
+    GE=0
+fi
 if [ "$GE" = 1 ]; then
     say "Downloading GE-Proton"
     as_user lsiw runners install ge || warn "GE-Proton could not be downloaded"

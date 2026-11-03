@@ -458,9 +458,28 @@ static int drives_ok(const char *prefix)
     free(dd);
     if (!d) return 0;
     struct dirent *de;
-    while ((de = readdir(d)))
-        if (drive_entry(de->d_name) && de->d_name[0] != 'c') { ok = 0; break; }
+    while ((de = readdir(d))) {
+        const char *n = de->d_name;
+        if (!drive_entry(n) || n[0] == 'c') continue;
+        /* Only the extra drives the user chose, each leading to its folder. */
+        const char *want = lsiw_drive_path(n[0]);
+        if (!want || n[2]) { ok = 0; break; }
+        char *link = lsiw_cli_printf("%s/dosdevices/%s", prefix, n);
+        char *cur = lsiw_cli_readlink(link);
+        free(link);
+        int same = cur && !strcmp(cur, want);
+        free(cur);
+        if (!same) { ok = 0; break; }
+    }
     closedir(d);
+    /* And every extra drive is there. */
+    for (int l = 'a'; ok && l <= 'z'; l++) {
+        if (l == 'c' || !lsiw_drive_path(l)) continue;
+        char *link = lsiw_cli_printf("%s/dosdevices/%c:", prefix, l);
+        struct stat st;
+        if (lstat(link, &st) < 0) ok = 0;
+        free(link);
+    }
     return ok;
 }
 
@@ -565,9 +584,11 @@ out:
     return rc;
 }
 
-/* LSIW has one drive: remove every other drive letter (Wine's z: -> / and
- * any letters it added for CD-ROMs or mounts). The "c::" raw-device entry
- * is kept: Wine reads the volume label and serial number through it. */
+/* Besides C:, only the extra drives the user chose (D: = a folder):
+ * remove every other drive letter (Wine's z: -> / and any letters it
+ * added for CD-ROMs or mounts), then link the extra drives. The "c::"
+ * raw-device entry is kept: Wine reads the volume label and serial number
+ * through it. */
 static int remove_other_drives(const char *prefix, int verbose)
 {
     char *dd = lsiw_cli_printf("%s/dosdevices", prefix);
@@ -582,6 +603,7 @@ static int remove_other_drives(const char *prefix, int verbose)
     while ((de = readdir(d))) {
         const char *n = de->d_name;
         if (!drive_entry(n) || n[0] == 'c') continue;
+        if (!n[2] && lsiw_drive_path(n[0])) continue;     /* an extra drive: linked below */
         struct stat st;
         if (fstatat(dirfd(d), n, &st, AT_SYMLINK_NOFOLLOW) < 0) continue;
         if (!S_ISLNK(st.st_mode)) {
@@ -594,10 +616,18 @@ static int remove_other_drives(const char *prefix, int verbose)
             rc = -1;
             continue;
         }
-        if (verbose && !n[2]) lsiw_log("removed drive %c: (LSIW has a single C: drive)\n", toupper((unsigned char)n[0]));
+        if (verbose && !n[2]) lsiw_log("removed drive %c: (not one of LSIW's drives)\n", toupper((unsigned char)n[0]));
     }
     closedir(d);
     free(dd);
+    /* prefix is <compat>/pfx */
+    char *compat = lsiw_cli_strdup(prefix);
+    char *sl = strrchr(compat, '/');
+    if (sl && !strcmp(sl, "/pfx")) {
+        *sl = 0;
+        if (lsiw_prefix_link_drives(compat, verbose) < 0) rc = -1;
+    }
+    free(compat);
     return rc;
 }
 
