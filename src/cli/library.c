@@ -18,7 +18,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <signal.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 static int is_dir(const char *p) { struct stat st; return stat(p, &st) == 0 && S_ISDIR(st.st_mode); }
@@ -253,6 +256,7 @@ const char lsiw_help_programs[] =
     "       lsiw programs shortcut ID [--desktop] [--remove]\n"
     "       lsiw programs lwlnk ID [PATH] [--icon IMAGE]\n"
     "       lsiw programs scan [--add]\n"
+    "       lsiw programs playtime [ID] [--reset]\n"
     "\n"
     "The library of Windows programs and games, each with its own settings.\n"
     "LSIW Control's Programs page shows the same library.\n"
@@ -284,7 +288,16 @@ const char lsiw_help_programs[] =
     "            program's icon ('lsiw lwlnk create ID [PATH]'; see 'lsiw help\n"
     "            lwlnk')\n"
     "  scan      list the programs installed in the shared prefix (Start menu\n"
-    "            shortcuts) that are not in the library; --add adds them\n";
+    "            shortcuts) that are not in the library; --add adds them\n"
+    "  playtime  how long each program ran (or ID only), how often it was\n"
+    "            started and when it was last played; --reset forgets it\n"
+    "\n"
+    "Play time: 'lsiw programs run', LSIW shortcuts (.lwlnk), LSIW Control and\n"
+    "applications-menu shortcuts record how long a program runs. lsiw waits for\n"
+    "it and saves the time every 30 seconds, so a crash or a power loss loses at\n"
+    "most that much; time the computer sleeps does not count. Records are in\n"
+    "~/.local/share/lsiw/playtime. Off: [programs] track_playtime = false or\n"
+    "LSIW_NO_PLAYTIME=1. Programs started with 'lsiw run' are not counted.\n";
 
 static struct lsiw_program *need_program(const char *id)
 {
@@ -374,6 +387,34 @@ static int apply_setting(struct lsiw_program *p, const char *arg)
     return rc;
 }
 
+/* Play time: a block for `programs show`, one line per program for
+ * `programs playtime`. */
+static void print_playtime(const struct lsiw_program *p, int line)
+{
+    struct lsiw_playtime pt;
+    lsiw_playtime_get(p->id, &pt);
+    char *total = lsiw_playtime_format(pt.total), *last = lsiw_playtime_when(pt.last_end ? pt.last_end : pt.last_start);
+    if (line) {
+        printf("%-24s %-28.28s %12s %8lld  %s%s\n", p->id, p->name, total, pt.launches,
+               pt.running ? "running now" : last, pt.running > 1 ? " (more than once)" : "");
+    } else {
+        printf("Play time: %s in %lld session%s%s\n", total, pt.launches, pt.launches == 1 ? "" : "s",
+               pt.running ? " (running now)" : "");
+        if (pt.launches) {
+            char *first = lsiw_playtime_when(pt.first), *len = lsiw_playtime_format(pt.last_session);
+            printf("Last:      %s, for %s (%s)\nFirst:     %s\n", last, len,
+                   *pt.last_result ? pt.last_result : "unknown", first);
+            if (pt.unclean)
+                printf("Lost:      %lld session%s ended without LSIW seeing it (counted until the last save)\n",
+                       pt.unclean, pt.unclean == 1 ? "" : "s");
+            free(first);
+            free(len);
+        }
+    }
+    free(total);
+    free(last);
+}
+
 static void print_program(const struct lsiw_program *p, int full)
 {
     if (!full) {
@@ -399,6 +440,7 @@ static void print_program(const struct lsiw_program *p, int full)
     printf("Shortcut:  %s\n", stat(df, &st) == 0 ? df : "none ('lsiw programs shortcut ID')");
     free(df);
     free(compat);
+    print_playtime(p, 0);
 }
 
 /* Split shell-quoted text into words ('...', "...", backslash). */
@@ -429,6 +471,69 @@ static char **split_args(const char *s, int *count)
     v[n] = NULL;
     *count = n;
     return v;
+}
+
+/* Run the program in a child process and record the session's play time
+ * here, the parent, which only waits: the native engine runs programs in
+ * the process that loads them, and Wine and Proton replace it (exec), so
+ * nothing is left to record the end otherwise. Ctrl+C from the terminal
+ * reaches the program itself (same process group); SIGTERM and SIGHUP sent
+ * to lsiw are passed on to it. */
+static int run_tracked(struct lsiw_program *p, int argc, char **argv)
+{
+    struct lsiw_session *s = lsiw_playtime_begin(p->id);
+    if (!s) return lsiw_cli_run(argc, argv, p->engine);
+    sigset_t set, old;
+    sigemptyset(&set);
+    sigaddset(&set, SIGCHLD);
+    sigaddset(&set, SIGTERM);
+    sigaddset(&set, SIGHUP);
+    sigaddset(&set, SIGINT);
+    sigaddset(&set, SIGQUIT);
+    sigprocmask(SIG_BLOCK, &set, &old);
+    fflush(NULL);
+    pid_t pid = fork();
+    if (pid < 0) {
+        sigprocmask(SIG_SETMASK, &old, NULL);
+        lsiw_playtime_end(s, "unknown");
+        return lsiw_cli_run(argc, argv, p->engine);
+    }
+    if (pid == 0) {
+        sigprocmask(SIG_SETMASK, &old, NULL);
+        _exit(lsiw_cli_run(argc, argv, p->engine) & 0xff);
+    }
+    int status = 0;
+    const char *t = getenv("LSIW_PLAYTIME_TICK");       /* tests */
+    long tick = t && atol(t) > 0 ? atol(t) : LSIW_PLAYTIME_TICK;
+    for (;;) {
+        struct timespec ts = { (time_t)tick, 0 };
+        siginfo_t si;
+        int sig = sigtimedwait(&set, &si, &ts);
+        if (sig < 0) {
+            if (errno == EAGAIN) lsiw_playtime_tick(s);
+            continue;
+        }
+        if (sig == SIGCHLD) {
+            pid_t r = waitpid(pid, &status, WNOHANG);
+            if (r == pid) break;
+            continue;
+        }
+        /* Keys typed in the terminal already reached the program. */
+        if ((sig == SIGINT || sig == SIGQUIT) && si.si_code == SI_KERNEL) continue;
+        kill(pid, sig);
+    }
+    sigprocmask(SIG_SETMASK, &old, NULL);
+    char result[32];
+    int rc;
+    if (WIFSIGNALED(status)) {
+        snprintf(result, sizeof result, "signal %d", WTERMSIG(status));
+        rc = 128 + WTERMSIG(status);
+    } else {
+        rc = WEXITSTATUS(status);
+        snprintf(result, sizeof result, "exit %d", rc);
+    }
+    lsiw_playtime_end(s, result);
+    return rc;
 }
 
 int lsiw_cli_program_run(struct lsiw_program *p, int argc, char **argv)
@@ -480,7 +585,7 @@ int lsiw_cli_program_run(struct lsiw_program *p, int argc, char **argv)
     for (int i = 0; i < argc; i++) av[k++] = argv[i];
     av[k] = NULL;
     if (lsiw_verbose) lsiw_log("starting %s (%s)\n", p->name, p->id);
-    return lsiw_cli_run(k, av, p->engine);
+    return run_tracked(p, k, av);
 }
 
 static char *self_path(void)
@@ -662,6 +767,40 @@ static int program_scan(int add)
     return added ? save() : 0;
 }
 
+static int program_playtime(int argc, char **argv)
+{
+    const char *id = NULL;
+    int reset = 0;
+    for (int i = 0; i < argc; i++) {
+        if (!strcmp(argv[i], "--reset")) reset = 1;
+        else if (argv[i][0] == '-') { lsiw_log("unknown option '%s'\n", argv[i]); return 2; }
+        else if (!id) id = argv[i];
+        else { lsiw_log("usage: lsiw programs playtime [ID] [--reset]\n"); return 2; }
+    }
+    if (reset && !id) { lsiw_log("usage: lsiw programs playtime ID --reset\n"); return 2; }
+    if (id) {
+        struct lsiw_program *p = need_program(id);
+        if (!p) return 1;
+        if (reset) {
+            lsiw_playtime_reset(p->id);
+            printf("forgot the play time of %s\n", p->id);
+        } else {
+            printf("%s (%s)\n", p->name, p->id);
+            print_playtime(p, 0);
+        }
+        lsiw_program_free(p);
+        return 0;
+    }
+    struct lsiw_program *v;
+    size_t n = lsiw_programs(&v);
+    if (!n) printf("The library is empty ('lsiw programs add PROGRAM', or 'lsiw programs scan').\n");
+    else printf("%-24s %-28s %12s %8s  %s\n", "ID", "NAME", "PLAY TIME", "LAUNCHES", "LAST PLAYED");
+    for (size_t i = 0; i < n; i++) print_playtime(&v[i], 1);
+    lsiw_programs_free(v, n);
+    if (!lsiw_playtime_enabled()) printf("(play time tracking is off: [programs] track_playtime = false or LSIW_NO_PLAYTIME)\n");
+    return 0;
+}
+
 int lsiw_cmd_programs(int argc, char **argv)
 {
     const char *sub = argc > 1 ? argv[1] : "list";
@@ -675,6 +814,7 @@ int lsiw_cmd_programs(int argc, char **argv)
         return 0;
     }
     if (!strcmp(sub, "scan")) return program_scan(argc > 2 && !strcmp(argv[2], "--add"));
+    if (!strcmp(sub, "playtime")) return program_playtime(argc - 2, argv + 2);
     if (argc < 3) { lsiw_log("usage: lsiw programs %s %s\n", sub, strcmp(sub, "add") ? "ID" : "PROGRAM"); return 2; }
     if (!strcmp(sub, "add")) {
         const char *name = NULL;
@@ -704,6 +844,7 @@ int lsiw_cmd_programs(int argc, char **argv)
         program_shortcut(p, 0, 1);
         lsiw_program_remove(p->id);
         rc = save();
+        if (!rc) lsiw_playtime_reset(p->id);
         if (!rc) printf("removed %s from the library (its files and prefix are left as they are)\n", p->id);
     } else if (!strcmp(sub, "run")) {
         rc = lsiw_cli_program_run(p, argc - 3, argv + 3);

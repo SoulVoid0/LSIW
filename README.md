@@ -24,7 +24,9 @@ LSIW also changes how Windows programs see your computer:
 * **A library.** Add your Windows programs and games and give each its own
   engine (LSIW's, any Wine, any Proton), DXVK/VKD3D, arguments, environment,
   MangoHud and a desktop shortcut. The default engine can be a chain: a
-  first choice and up to three fallbacks.
+  first choice and up to three fallbacks. LSIW keeps track of how long
+  each one runs (play time, launches, last played), and LSIW Control shows
+  the library as a *Grid*, a *List* or *Details*.
 * **Your folders.** Every Windows folder (Documents, AppData, Program Files,
   the Windows folder, Temp and every other variable Microsoft's migration
   tool [USMT recognises](https://learn.microsoft.com/en-us/windows/deployment/usmt/usmt-recognized-environment-variables))
@@ -118,9 +120,9 @@ Every release also has installers that do everything for you:
 | `lsiw-VERSION-offline-installer-rpm.run` / `-deb.run` / `-appimage.run` | one format | Fedora & co. / Debian & co. / any distribution, no network needed |
 
 ```sh
-sh lsiw-1.8.0-offline-installer-deb.run           # install (same options as install.sh)
-sh lsiw-1.8.0-offline-installer-deb.run --verify  # only check the file
-sh lsiw-1.8.0-offline-installer.run --extract dir # only unpack the packages
+sh lsiw-1.9.0-offline-installer-deb.run           # install (same options as install.sh)
+sh lsiw-1.9.0-offline-installer-deb.run --verify  # only check the file
+sh lsiw-1.9.0-offline-installer.run --extract dir # only unpack the packages
 ```
 
 Offline installers check their payload and every package against the
@@ -167,19 +169,19 @@ GitHub release, so they are not a signature.
 ### Fedora, RHEL, openSUSE (.rpm)
 
 ```sh
-sudo dnf install ./lsiw-1.8.0-1.x86_64.rpm ./lsiw-control-1.8.0-1.x86_64.rpm
+sudo dnf install ./lsiw-1.9.0-1.x86_64.rpm ./lsiw-control-1.9.0-1.x86_64.rpm
 sudo dnf install wine        # optional: the fallback engine
 # openSUSE: sudo zypper install --allow-unsigned-rpm ./lsiw-*.rpm
 ```
 
 The prebuilt RPMs need glibc 2.38 (Fedora 39 or newer). On older systems
-rebuild them: `rpmbuild --rebuild lsiw-1.8.0-1.src.rpm` (or let
+rebuild them: `rpmbuild --rebuild lsiw-1.9.0-1.src.rpm` (or let
 `install.sh` do it).
 
 ### Debian, Ubuntu, Mint (.deb)
 
 ```sh
-sudo apt install ./lsiw_1.8.0-1_amd64.deb ./lsiw-control_1.8.0-1_amd64.deb
+sudo apt install ./lsiw_1.9.0-1_amd64.deb ./lsiw-control_1.9.0-1_amd64.deb
 ```
 
 `lsiw` runs on Debian 11, Ubuntu 20.04 and newer. LSIW Control needs GTK
@@ -190,10 +192,10 @@ install `lsiw_*.deb` alone and use the command line. Remove with
 ### Any distribution (.AppImage)
 
 ```sh
-chmod +x LSIW-1.8.0-x86_64.AppImage
-./LSIW-1.8.0-x86_64.AppImage                      # opens LSIW Control
-./LSIW-1.8.0-x86_64.AppImage run setup.exe        # any lsiw command
-ln -s "$PWD/LSIW-1.8.0-x86_64.AppImage" ~/.local/bin/lsiw   # a normal `lsiw` command
+chmod +x LSIW-1.9.0-x86_64.AppImage
+./LSIW-1.9.0-x86_64.AppImage                      # opens LSIW Control
+./LSIW-1.9.0-x86_64.AppImage run setup.exe        # any lsiw command
+ln -s "$PWD/LSIW-1.9.0-x86_64.AppImage" ~/.local/bin/lsiw   # a normal `lsiw` command
 ```
 
 The AppImage holds `lsiw`, LSIW Control and the GTK 4 libraries, so it
@@ -388,6 +390,8 @@ lsiw programs run game-x                     # start it with its settings
 lsiw programs shortcut game-x --desktop      # menu and desktop launcher (.desktop)
 lsiw lwlnk create game-x                     # LSIW shortcut on the desktop (.lwlnk)
 lsiw programs scan --add                     # add what installers put in the Start menu
+lsiw programs playtime                       # play time, launches, last played
+lsiw programs playtime game-x --reset        # forget it
 lsiw programs remove game-x
 ```
 
@@ -401,6 +405,30 @@ installed*, *Desktop shortcut* (on every program) and *Add to applications
 menu*. `icon=FILE` (or *Icon* in *Settings…*) gives a program another icon:
 an image, or an `.exe`/`.dll` to take it from; by default it is the icon
 inside the program.
+
+**Layouts.** The *Layout* buttons above the library switch between *Grid*
+(big icons with the name and play time), *List* (one row per program with
+its settings and a *Desktop shortcut* button) and *Details* (a table with
+name, play time, last played, launches, last session, engine and program;
+click a header to sort, drag to resize or reorder). *Sort by* orders them
+by name, most played, recently played or most launched. LSIW Control
+remembers both (`[control] programs_layout` and `programs_sort`).
+
+**Play time.** Every start of a library program is counted: `lsiw
+programs run`, LSIW shortcuts (.lwlnk), *Launch* in LSIW Control and
+applications-menu shortcuts. `lsiw` stays behind as a small watcher until
+the program ends and records the total play time, the number of launches,
+the first and last time it was played, how long the last session lasted
+and how it ended (`exit 0`, `signal 11`, ...). The time is saved every 30
+seconds while the program runs, so a crash of the program, of `lsiw` or a
+power loss loses at most that much; such a session is shown as *lost*.
+Time the computer sleeps does not count, and two copies of the same
+program running at once count once. LSIW Control updates the numbers while
+it is open and shows what is running now. The records are in
+`~/.local/share/lsiw/playtime/`; `[programs] track_playtime = false` or
+`LSIW_NO_PLAYTIME=1` turns tracking off. Programs started with `lsiw run`
+or outside LSIW (for example by Steam itself) are not counted, and
+launchers that start the game and exit at once count only their own time.
 
 ### `lsiw launch` / `lsiw lwlnk`: LSIW shortcuts (.lwlnk)
 

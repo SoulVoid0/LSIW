@@ -14,7 +14,7 @@
 extern "C" {
 #endif
 
-#define LSIW_VERSION "1.8.0"
+#define LSIW_VERSION "1.9.0"
 
 /* ------------------------------------------------------------------ */
 /* Variable table                                                       */
@@ -231,6 +231,45 @@ char  *lsiw_program_desktop_file(const struct lsiw_program *p);
 char  *lsiw_program_icon(const struct lsiw_program *p, int refresh);
 /* 1 if `path` is a PNG file (by its signature). */
 int    lsiw_is_png_file(const char *path);
+
+/* ------------------------------------------------------------------ */
+/* Play time of library programs (playtime.c)                           */
+/* ------------------------------------------------------------------ */
+
+/* How often a running session is credited (seconds). */
+#define LSIW_PLAYTIME_TICK 30
+struct lsiw_playtime {
+    long long total;         /* seconds the program ran, all sessions     */
+    long long launches;      /* sessions started                          */
+    long long first;         /* first start (seconds since 1970), 0 never */
+    long long last_start;    /* the last session's start                  */
+    long long last_end;      /* when it ended (or its last credit)        */
+    long long last_session;  /* its length in seconds                     */
+    long long unclean;       /* sessions LSIW lost track of (power loss)  */
+    char last_result[64];    /* "exit 0", "exit 3", "signal 11", "running",*/
+                             /* "unknown", "" before the first session    */
+    int running;             /* sessions running right now                */
+};
+/* 0 when $LSIW_NO_PLAYTIME is set or [programs] track_playtime = false. */
+int   lsiw_playtime_enabled(void);
+/* <data>/playtime. Caller frees. */
+char *lsiw_playtime_dir(void);
+/* The record of a program (all zero if it never ran). -1 for a bad id. */
+int   lsiw_playtime_get(const char *id, struct lsiw_playtime *out);
+void  lsiw_playtime_reset(const char *id);
+/* Changes whenever a record changes (for polling). */
+long long lsiw_playtime_stamp(void);
+/* A session: begin when the program starts (NULL when tracking is off),
+ * tick every LSIW_PLAYTIME_TICK seconds while it runs, end with its result
+ * ("exit 0", "signal 11"). end frees the session. */
+struct lsiw_session;
+struct lsiw_session *lsiw_playtime_begin(const char *id);
+void  lsiw_playtime_tick(struct lsiw_session *s);
+void  lsiw_playtime_end(struct lsiw_session *s, const char *result);
+/* "45 s", "12 min", "3 h 05 min", "250 h"; "today 14:02", "yesterday
+ * 09:15", "2026-10-30 21:40", "never". Caller frees. */
+char *lsiw_playtime_format(long long seconds);
+char *lsiw_playtime_when(long long t);
 
 /* ------------------------------------------------------------------ */
 /* Icons (icon.c)                                                       */

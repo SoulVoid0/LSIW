@@ -177,6 +177,7 @@ check-cli: lsiw
 	LSIW='$(CURDIR)/lsiw' bash tests/lwlnk.sh
 	LSIW='$(CURDIR)/lsiw' bash tests/cdrive.sh
 	LSIW='$(CURDIR)/lsiw' bash tests/drives.sh
+	LSIW='$(CURDIR)/lsiw' bash tests/playtime.sh
 
 # How many functions each export table of the native engine provides
 # (table entries; see docs/COMPATIBILITY.md).
