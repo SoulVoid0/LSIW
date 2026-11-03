@@ -32,6 +32,7 @@ static const char app_css[] =
     ".lsiw-heading { font-weight: 700; font-size: 130%; }\n"
     ".lsiw-bold { font-weight: 700; }\n"
     ".lsiw-dim { opacity: 0.6; }\n"
+    ".lsiw-playtime { opacity: 0.8; font-size: 0.92em; }\n"
     ".lsiw-small { font-size: 90%; }\n"
     ".lsiw-mono { font-family: monospace; }\n"
     ".lsiw-on { color: @success_color; }\n"

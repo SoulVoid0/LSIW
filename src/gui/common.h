@@ -42,6 +42,22 @@ GtkWidget *lsiw_page_programs_new(void);
 GtkWidget *lsiw_page_integration_new(void);
 GtkWidget *lsiw_page_steam_new(void);
 GtkWidget *lsiw_page_update_new(void);
+/* The library view of the Programs page (libview.c): the programs in a
+ * Grid, List or Details layout with their play time. `changed` runs when
+ * the selection changes, `activated` on a double-click (or Enter) and
+ * `shortcut` from a row's Desktop shortcut button. The view is freed with
+ * its widget. */
+typedef struct LsiwLibView LsiwLibView;
+typedef void (*LsiwLibViewChanged)(gpointer data);
+typedef void (*LsiwLibViewActivated)(const char *id, gpointer data);
+LsiwLibView *lsiw_libview_new(LsiwLibViewChanged changed, LsiwLibViewActivated activated,
+                              LsiwLibViewActivated shortcut, gpointer data);
+GtkWidget   *lsiw_libview_widget(LsiwLibView *v);
+/* Read the library and play time again; select `select` (or keep the
+ * selection when NULL). */
+void         lsiw_libview_reload(LsiwLibView *v, const char *select);
+/* The id of the selected program, or NULL. */
+const char  *lsiw_libview_selected(LsiwLibView *v);
 /* Show or hide the window's "a new version is available" banner after
  * the last update check (main.c); `any` is any widget of the window. */
 void lsiw_gui_update_banner(GtkWidget *any);

@@ -6,6 +6,36 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-11-03
+
+### Added
+
+- **Play time tracking.** LSIW records how long each program of the
+  library runs when it is started with `lsiw programs run`, an LSIW
+  shortcut (.lwlnk), LSIW Control's *Launch* or an applications-menu
+  shortcut: total play time, launches, first and last played, the last
+  session's length and result. `lsiw` waits for the program in a small
+  watcher process (Ctrl+C reaches the program; SIGTERM/SIGHUP are passed
+  on; the program's exit code stays lsiw's) and saves every 30 seconds, so
+  crashes and power losses lose at most that much (counted as *lost*
+  sessions). Sleep time is not counted; overlapping sessions of one
+  program count once. `lsiw programs playtime [ID] [--reset]`, play time in
+  `lsiw programs show`; off with `[programs] track_playtime = false` or
+  `LSIW_NO_PLAYTIME=1`. Records: `~/.local/share/lsiw/playtime/`
+  (src/common/playtime.c). Tests: tests/playtime.sh.
+- **Library layouts in LSIW Control.** The Programs page shows the
+  library as a *Grid* of big icons, a *List* (as before, now with play
+  time) or *Details*, a table with sortable, resizable columns (name, play
+  time, last played, launches, last session, engine, program), with *Sort
+  by* name, most played, recently played or most launched. The choice is
+  remembered (`[control] programs_layout`, `programs_sort`). Play time
+  updates live and the page shows what is running now (src/gui/libview.c).
+
+### Changed
+
+- Double-clicking (not a single click) a program in the List layout opens
+  its settings, as the page always said.
+
 ## [1.8.0] - 2026-11-03
 
 ### Added

@@ -53,6 +53,14 @@
   </supports>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="1.9.0" date="2026-11-03">
+      <description>
+        <p>LSIW keeps track of how long each program of the library runs: play time, launches and
+        when it was last played, saved while it runs so crashes lose almost nothing. The Programs
+        page can show the library as a Grid, a List or Details with sortable columns, and
+        remembers the choice.</p>
+      </description>
+    </release>
     <release version="1.8.0" date="2026-11-03">
       <description>
         <p>Any folder can be a drive of its own (D:, E:, ...) for LSIW's engine, Wine and Proton.

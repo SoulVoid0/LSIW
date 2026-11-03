@@ -18,7 +18,7 @@
 %global lsiw_make_vars GUI=yes CC="%{__cc}" CFLAGS="%{build_cflags}" LDFLAGS="%{build_ldflags}" PREFIX=%{_prefix} BINDIR=%{_bindir} LIBEXECDIR=%{_libexecdir} DATADIR=%{_datadir} SYSCONFDIR=%{_sysconfdir} BINFMTDIR=%{_binfmtdir} TMPFILESDIR=%{_tmpfilesdir} METAINFODIR=%{_metainfodir}
 
 Name:           lsiw
-Version:        1.8.0
+Version:        1.9.0
 Release:        1%{?dist}
 Summary:        Run Windows x86-64 programs on Linux with a native engine
 
@@ -147,6 +147,12 @@ update-desktop-database -q %{_datadir}/applications &>/dev/null || :
 %{_metainfodir}/io.github.lsiw.Control.metainfo.xml
 
 %changelog
+* Tue Nov 03 2026 The LSIW contributors - 1.9.0-1
+- Play time tracking of library programs (total, launches, last played,
+  last session); 'lsiw programs playtime'; crash- and power-loss-safe
+- LSIW Control: Grid, List and Details layouts for the Programs page,
+  sort by name, play time, last played or launches; remembered
+
 * Tue Nov 03 2026 The LSIW contributors - 1.8.0-1
 - Extra drives: any folder can be D:, E:, ... for the native engine, Wine
   and Proton ('lsiw drives', the Drives page of LSIW Control)

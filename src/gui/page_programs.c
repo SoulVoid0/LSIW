@@ -6,7 +6,9 @@
  * tool (native, a Wine version, a Proton version, the custom chain), prefix
  * (shared by default, or its own), DXVK and VKD3D, launch arguments,
  * environment variables, MangoHud, a debug log, an icon and shortcuts.
- * Programs of the library are started with `lsiw programs run ID`.
+ * Programs of the library are started with `lsiw programs run ID`, which
+ * records their play time. The library is shown by libview.c as a Grid,
+ * a List or Details (the layout the user picked).
  * *Desktop shortcut* puts an LSIW shortcut (.lwlnk, `lsiw lwlnk create
  * ID`) on the desktop: double-clicking it starts the program with these
  * settings, and file managers show the program's icon for it.
@@ -41,7 +43,8 @@ enum { MODE_NONE, MODE_RUN, MODE_CHECK, MODE_SCAN, MODE_LWLNK };
 struct prog_page {
     LsiwPage base;
     GSimpleActionGroup *actions;
-    GtkWidget *path_entry, *args_entry, *engine_dd, *status, *lib_list;
+    GtkWidget *path_entry, *args_entry, *engine_dd, *status;
+    LsiwLibView *lib;
     GtkTextView *output;
     LsiwTask *runner;
     char *last_dir;
@@ -406,8 +409,7 @@ static int tri_value(guint i) { return i == 1 ? 1 : i == 2 ? 0 : -1; }
 
 static const char *selected_id(struct prog_page *p)
 {
-    GtkListBoxRow *row = gtk_list_box_get_selected_row(GTK_LIST_BOX(p->lib_list));
-    return row ? g_object_get_data(G_OBJECT(row), "lsiw-id") : NULL;
+    return p->lib ? lsiw_libview_selected(p->lib) : NULL;
 }
 
 static void update_lib_actions(struct prog_page *p)
@@ -422,82 +424,29 @@ static void update_lib_actions(struct prog_page *p)
     lsiw_gui_action_enable(p->actions, "lib-scan", !busy);
 }
 
-static char *engine_summary(const struct lsiw_program *pr)
+static void lwlnk_for(struct prog_page *p, const char *id);
+static void open_editor(struct prog_page *p, const char *id);
+
+static void lib_changed_cb(gpointer data)
 {
-    const char *e = *pr->engine ? pr->engine : "default engine";
-    const char *pf = !*pr->prefix || !g_ascii_strcasecmp(pr->prefix, "shared") ? "shared prefix"
-                   : !g_ascii_strcasecmp(pr->prefix, "own") ? "own prefix" : pr->prefix;
-    GString *s = g_string_new(NULL);
-    g_string_append_printf(s, "%s · %s", e, pf);
-    if (pr->dxvk >= 0) g_string_append_printf(s, " · DXVK %s", pr->dxvk ? "on" : "off");
-    if (pr->vkd3d >= 0) g_string_append_printf(s, " · VKD3D %s", pr->vkd3d ? "on" : "off");
-    if (pr->mangohud) g_string_append(s, " · MangoHud");
-    if (pr->debug) g_string_append(s, " · debug log");
-    return g_string_free(s, FALSE);
+    update_lib_actions(data);
 }
 
-static void lwlnk_for(struct prog_page *p, const char *id);
+static void lib_activated_cb(const char *id, gpointer data)
+{
+    open_editor(data, id);
+}
 
-/* The desktop-shortcut button of one row. */
-static void row_lwlnk_clicked(GtkButton *b, gpointer data)
+/* The desktop-shortcut button of a row of the List layout. */
+static void lib_shortcut_cb(const char *id, gpointer data)
 {
     struct prog_page *p = data;
-    const char *id = g_object_get_data(G_OBJECT(b), "lsiw-id");
-    GtkWidget *row = gtk_widget_get_ancestor(GTK_WIDGET(b), GTK_TYPE_LIST_BOX_ROW);
-    if (row) gtk_list_box_select_row(GTK_LIST_BOX(p->lib_list), GTK_LIST_BOX_ROW(row));
-    if (id && !lsiw_task_running(p->runner)) lwlnk_for(p, id);
+    if (!lsiw_task_running(p->runner)) lwlnk_for(p, id);
 }
 
 static void fill_library(struct prog_page *p, const char *select)
 {
-    char *keep = g_strdup(select ? select : selected_id(p));
-    gtk_list_box_remove_all(GTK_LIST_BOX(p->lib_list));
-    struct lsiw_program *v;
-    size_t n = lsiw_programs(&v);
-    for (size_t i = 0; i < n; i++) {
-        GtkWidget *outer = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
-        gtk_widget_set_margin_top(outer, 4);
-        gtk_widget_set_margin_bottom(outer, 4);
-        gtk_widget_set_margin_start(outer, 8);
-        gtk_widget_set_margin_end(outer, 8);
-        /* The program's icon (cached as a PNG; made once from the .exe). */
-        char *icon = lsiw_program_icon(&v[i], 0);
-        GtkWidget *img = icon ? gtk_image_new_from_file(icon) : gtk_image_new_from_icon_name("application-x-executable");
-        free(icon);
-        gtk_image_set_pixel_size(GTK_IMAGE(img), 32);
-        gtk_widget_set_valign(img, GTK_ALIGN_CENTER);
-        gtk_box_append(GTK_BOX(outer), img);
-        GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
-        gtk_widget_set_hexpand(box, TRUE);
-        gtk_box_append(GTK_BOX(outer), box);
-        GtkWidget *name = gtk_label_new(v[i].name);
-        gtk_label_set_xalign(GTK_LABEL(name), 0);
-        gtk_widget_add_css_class(name, "lsiw-bold");
-        gtk_box_append(GTK_BOX(box), name);
-        char *sum = engine_summary(&v[i]);
-        char *line = g_strdup_printf("%s\n%s", sum, v[i].exe);
-        GtkWidget *d = gtk_label_new(line);
-        gtk_label_set_xalign(GTK_LABEL(d), 0);
-        gtk_label_set_ellipsize(GTK_LABEL(d), PANGO_ELLIPSIZE_MIDDLE);
-        gtk_widget_add_css_class(d, "lsiw-dim");
-        gtk_box_append(GTK_BOX(box), d);
-        g_free(line);
-        g_free(sum);
-        GtkWidget *mk = gtk_button_new_with_label("Desktop shortcut");
-        gtk_widget_set_tooltip_text(mk, "Desktop shortcut: put an LSIW shortcut (.lwlnk) with this program's "
-                                        "icon on the desktop");
-        gtk_widget_set_valign(mk, GTK_ALIGN_CENTER);
-        g_object_set_data_full(G_OBJECT(mk), "lsiw-id", g_strdup(v[i].id), g_free);
-        g_signal_connect(mk, "clicked", G_CALLBACK(row_lwlnk_clicked), p);
-        gtk_box_append(GTK_BOX(outer), mk);
-        GtkWidget *row = gtk_list_box_row_new();
-        gtk_list_box_row_set_child(GTK_LIST_BOX_ROW(row), outer);
-        g_object_set_data_full(G_OBJECT(row), "lsiw-id", g_strdup(v[i].id), g_free);
-        gtk_list_box_append(GTK_LIST_BOX(p->lib_list), row);
-        if (keep && !strcmp(keep, v[i].id)) gtk_list_box_select_row(GTK_LIST_BOX(p->lib_list), GTK_LIST_BOX_ROW(row));
-    }
-    lsiw_programs_free(v, n);
-    g_free(keep);
+    if (p->lib) lsiw_libview_reload(p->lib, select);
     update_lib_actions(p);
 }
 
@@ -987,19 +936,6 @@ static void act_lib_remove(GSimpleAction *a, GVariant *param, gpointer data)
     lib_cli(p, "remove", id, NULL, MODE_NONE);
 }
 
-static void lib_selected_cb(GtkListBox *box, GtkListBoxRow *row, gpointer data)
-{
-    (void)box; (void)row;
-    update_lib_actions(data);
-}
-
-static void lib_activated_cb(GtkListBox *box, GtkListBoxRow *row, gpointer data)
-{
-    (void)box;
-    const char *id = g_object_get_data(G_OBJECT(row), "lsiw-id");
-    if (id) open_editor(data, id);
-}
-
 static void entry_activate_cb(GtkEntry *e, gpointer data)
 {
     (void)e;
@@ -1026,25 +962,15 @@ GtkWidget *lsiw_page_programs_new(void)
         "Your Windows programs and games, each with its own settings: the engine (LSIW's native "
         "engine, a Wine version or a Proton version), DXVK and VKD3D, the prefix (the <b>shared "
         "prefix</b> every program and game uses, or one of its own), launch arguments, "
-        "environment variables, MangoHud, a debug log and an icon. Double-click one to change its "
+        "environment variables, MangoHud, a debug log and an icon. Show them as a <b>Grid</b>, a "
+        "<b>List</b> or <b>Details</b> with sortable columns. LSIW keeps track of how long each one "
+        "runs when it is started from here, from its shortcuts or with <tt>lsiw programs run</tt>: "
+        "play time, launches and when it was last played. Double-click one to change its "
         "settings. <b>Desktop shortcut</b> puts an LSIW shortcut (.lwlnk) with the program's icon on "
         "the desktop that starts it with these settings. <b>Find installed</b> adds what installers "
         "put in the Start menu."));
-    p->lib_list = gtk_list_box_new();
-    gtk_list_box_set_selection_mode(GTK_LIST_BOX(p->lib_list), GTK_SELECTION_SINGLE);
-    GtkWidget *lib_empty = gtk_label_new("No programs yet: Add program… or Find installed.");
-    gtk_widget_add_css_class(lib_empty, "lsiw-dim");
-    gtk_widget_set_margin_top(lib_empty, 12);
-    gtk_widget_set_margin_bottom(lib_empty, 12);
-    gtk_list_box_set_placeholder(GTK_LIST_BOX(p->lib_list), lib_empty);
-    g_signal_connect(p->lib_list, "row-selected", G_CALLBACK(lib_selected_cb), p);
-    g_signal_connect(p->lib_list, "row-activated", G_CALLBACK(lib_activated_cb), p);
-    GtkWidget *lib_sw = gtk_scrolled_window_new();
-    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(lib_sw), p->lib_list);
-    gtk_scrolled_window_set_min_content_height(GTK_SCROLLED_WINDOW(lib_sw), 150);
-    GtkWidget *lib_frame = gtk_frame_new(NULL);
-    gtk_frame_set_child(GTK_FRAME(lib_frame), lib_sw);
-    gtk_box_append(GTK_BOX(page), lib_frame);
+    p->lib = lsiw_libview_new(lib_changed_cb, lib_activated_cb, lib_shortcut_cb, p);
+    gtk_box_append(GTK_BOX(page), lsiw_libview_widget(p->lib));
     GtkWidget *lrow = lsiw_gui_wrap_row(8);
     GtkWidget *lrun = lsiw_gui_action_button("_Launch", "prog.lib-run");
     gtk_widget_add_css_class(lrun, "suggested-action");
