@@ -22,8 +22,23 @@ export XDG_DATA_DIRS=$tmp/nowhere LSIW_NO_UPDATE_CHECK=1
 unset STEAM_COMPAT_CLIENT_INSTALL_PATH STEAM_COMPAT_DATA_PATH SteamAppId SteamGameId UMU_ID LSIW_PREFIX LSIW_INSTANCE
 mkdir -p "$HOME"
 tag=lsiw-instances-$$
+# pgrep without procps (not in every container): pids whose argv[0]
+# matches the extended regular expression $1.
+cat > "$tmp/procs.sh" <<'END'
+pmatch() {
+    local d c
+    for d in /proc/[0-9]*; do
+        c=
+        IFS= read -r -d '' c < "$d/cmdline" 2>/dev/null
+        [ -n "$c" ] && [[ $c =~ $1 ]] && echo "${d#/proc/}"
+    done
+    return 0
+}
+pany() { [ -n "$(pmatch "$1")" ]; }
+END
+. "$tmp/procs.sh"
 cleanup() {
-    pkill -f "$tag" 2>/dev/null
+    for p in $(pmatch "$tag"); do kill "$p" 2>/dev/null; done
     [ -n "${server_dir:-}" ] && rm -rf "$server_dir"
     rm -rf "$tmp"
 }
@@ -52,15 +67,16 @@ make_proton() {   # DIR
     sed -e "s|@TMP@|$tmp|g" -e "s|@TAG@|$tag|g" -e "s|@DIR@|$1|g" -e "s|@SERVER@|$server_dir|g" \
         > "$1/proton" <<'END'
 #!/bin/bash
+. "@TMP@/procs.sh"
 echo "$(basename "$(dirname "$0")") $1 $3" >> "@TMP@/verbs"
-if ! pgrep -f "wineserver @TAG@" >/dev/null; then
+if ! pany "wineserver @TAG@"; then
     mkdir -p "@SERVER@"
     (cd "@SERVER@" && setsid bash -c 'exec -a "$0 @TAG@" "$0" 1000' "@DIR@/files/bin/wineserver" \
         </dev/null >/dev/null 2>&1 &)
 fi
 setsid bash -c 'exec -a "Z:\\prog\\$0.exe" sleep "$1"' "$3" "$4" </dev/null >/dev/null 2>&1 &
 sleep 0.5
-while pgrep -f '^Z:.prog.' >/dev/null; do sleep 0.2; done
+while pany '^Z:.prog.'; do sleep 0.2; done
 exit 0
 END
     chmod +x "$1/proton"
@@ -77,7 +93,7 @@ start() {
         </dev/null >"$tmp/$1.out" 2>"$tmp/$1.err" &
     echo $! > "$tmp/$1.pid"
 }
-running() { pgrep -f "^Z:.prog.$1.exe" >/dev/null && echo yes || echo no; }
+running() { pany "^Z:.prog.$1.exe" && echo yes || echo no; }
 wait_for() {   # NAME: wait until its program runs
     for _ in $(seq 1 50); do [ "$(running "$1")" = yes ] && return 0; sleep 0.1; done
     return 1
@@ -110,7 +126,7 @@ for _ in $(seq 1 60); do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
 same "stopped instance ends" "$(kill -0 "$pid" 2>/dev/null && echo running || echo ended)" ended
 same "its program is gone" "$(running third)" no
 same "the other program keeps running" "$(running second)" yes
-same "the wineserver keeps running" "$(pgrep -f "wineserver $tag" >/dev/null && echo yes || echo no)" yes
+same "the wineserver keeps running" "$(pany "wineserver $tag" && echo yes || echo no)" yes
 
 kill -TERM -- "-$(cat "$tmp/second.pid")"
 for _ in $(seq 1 60); do [ "$(running second)" = no ] && break; sleep 0.1; done
