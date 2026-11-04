@@ -201,12 +201,34 @@ static char **add_unique_real(char **v, size_t *n, const char *path)
     return nv;
 }
 
+/* 1 when `root` holds the Steam client itself (not only a library). */
+static int steam_client_at(const char *root)
+{
+    static const char *const marks[] = { "steam.sh", "ubuntu12_32/steam", "linux64/steamclient.so",
+                                         "ubuntu12_64/steamclient.so", "linux32/steamclient.so",
+                                         "ubuntu12_32/steamclient.so", NULL };
+    for (int i = 0; marks[i]; i++) {
+        char *p = lsiw_strdup_printf("%s/%s", root, marks[i]);
+        struct stat st;
+        int ok = stat(p, &st) == 0;
+        free(p);
+        if (ok) return 1;
+    }
+    return 0;
+}
+
 char **lsiw_steam_roots(void)
 {
     const char *home = lsiw_home_dir();
     const char *ov = lsiw_setting_get("steam", "root", NULL);
+    /* ~/.steam/root and ~/.steam/steam are the links Steam keeps to where
+     * it is installed; Debian's and Ubuntu's steam-installer put it in
+     * ~/.steam/debian-installation, others in ~/.local/share/Steam (or
+     * $XDG_DATA_HOME/Steam); then Flatpak and Snap. */
     const char *cands[] = { "/.steam/root", "/.steam/steam", "/.local/share/Steam",
+                            "/.steam/debian-installation",
                             "/.var/app/com.valvesoftware.Steam/data/Steam",
+                            "/.var/app/com.valvesoftware.Steam/.local/share/Steam",
                             "/snap/steam/common/.local/share/Steam", NULL };
     char **v = NULL;
     size_t n = 0;
@@ -215,14 +237,28 @@ char **lsiw_steam_roots(void)
         v = add_unique_real(v, &n, p);
         free(p);
     }
-    for (int i = 0; cands[i]; i++) {
-        char *p = lsiw_strdup_printf("%s%s", home, cands[i]);
+    const char *xdg = getenv("XDG_DATA_HOME");
+    char *xdg_steam = xdg && xdg[0] == '/' ? lsiw_strdup_printf("%s/Steam", xdg) : NULL;
+    for (int i = -1; i < 0 || cands[i]; i++) {
+        char *p = i < 0 ? (xdg_steam ? strdup(xdg_steam) : NULL) : lsiw_strdup_printf("%s%s", home, cands[i]);
+        if (!p) continue;
         char *sa = lsiw_strdup_printf("%s/steamapps", p);
-        if (is_dir(sa)) v = add_unique_real(v, &n, p);
+        if (is_dir(sa) || steam_client_at(p)) v = add_unique_real(v, &n, p);
         free(sa);
         free(p);
     }
+    free(xdg_steam);
     return v;
+}
+
+char *lsiw_steam_client_dir(void)
+{
+    char **roots = lsiw_steam_roots();
+    char *found = NULL;
+    for (char **r = roots; r && *r && !found; r++)
+        if (steam_client_at(*r)) found = strdup(*r);
+    free_list(roots);
+    return found;
 }
 
 int lsiw_steam_root_sandboxed(const char *root)

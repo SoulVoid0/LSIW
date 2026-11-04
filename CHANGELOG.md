@@ -6,6 +6,42 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.1] - 2026-11-04
+
+### Fixed
+
+- **Programs did not start with Proton** (GE-Proton, DW-Proton, Proton -
+  Experimental and every other build): Proton stopped with
+  `FileNotFoundError: ... shared/tracked_files` in `update_builtin_libs`
+  before the program started. Proton reads that list whenever the prefix
+  counts as made (`pfx/creation_sync_guard`, which it also writes when it
+  upgrades a prefix from before Proton 10, such as a version file saying
+  `4.11-2`), and the shared prefix had the guard but not the list. LSIW now
+  repairs such prefixes before starting Proton (the shared prefix, a
+  program's own prefix and Steam games through LSIW Proton): it creates
+  the missing list, or, for a guard without a prefix behind it, lets Proton
+  set the prefix up again. Nothing in the prefix is deleted.
+- **Steam detection.** Steam installed by Debian's and Ubuntu's
+  steam-installer (`~/.steam/debian-installation`), in `$XDG_DATA_HOME/Steam`
+  or in another Flatpak data folder is found, so its Proton versions
+  (`steamapps/common/Proton*` in every library, `compatibilitytools.d`) are
+  listed and run. `STEAM_COMPAT_CLIENT_INSTALL_PATH` is the Steam folder
+  that holds the client itself (`steam.sh`, `steamclient.so`), not just
+  the first folder with a `steamapps`.
+- The warning "Proton - Experimental needs the Steam client ... and Steam
+  is not installed" appeared although Steam was installed (it looked for
+  `ubuntu12_64/steamclient.so` only) and was wrong anyway: Valve's Proton
+  starts programs outside Steam. It is gone; with `-v` a note says when
+  Steam is really missing.
+- The "asks for the Steam Linux Runtime, which is not installed" message
+  is only shown with `-v` for GE-Proton and similar builds, which run
+  without it.
+
+### Added
+
+- tests/proton.sh (in `make check-cli`): prefix repair, Steam detection and
+  the client folder, with a stand-in Proton.
+
 ## [1.9.0] - 2026-11-03
 
 ### Added

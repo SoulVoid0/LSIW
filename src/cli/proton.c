@@ -309,8 +309,57 @@ static char *shared_mounts(void)
     return m;
 }
 
+/* Proton keeps a list of the files it put into the prefix in
+ * <compat>/tracked_files, and it reads that list whenever the prefix
+ * already counts as made (pfx/creation_sync_guard, which Proton also
+ * writes when it upgrades a prefix from before Proton 10). A prefix that
+ * has the guard but not the list makes every Proton stop with
+ * "FileNotFoundError: ... tracked_files" in update_builtin_libs, before the
+ * program starts: a prefix Wine made and an older Proton upgraded, a
+ * version file from another Proton, or a list deleted by hand. Repair it:
+ *   - guard but no registry: the prefix was never made; the guard goes, so
+ *     Proton makes the prefix (filling in only missing files);
+ *   - otherwise an empty list: Proton adds the files it updates to it.
+ * Nothing in the prefix is deleted. Returns 1 when something was repaired. */
+int lsiw_proton_repair_prefix(const char *compat, int verbose)
+{
+    char *tracked = lsiw_cli_printf("%s/tracked_files", compat);
+    char *guard = lsiw_cli_printf("%s/pfx/creation_sync_guard", compat);
+    char *sysreg = lsiw_cli_printf("%s/pfx/system.reg", compat);
+    struct stat st;
+    int rc = 0;
+    if (lstat(tracked, &st) == 0) {
+        if (!S_ISREG(st.st_mode) && !is_file(tracked))
+            lsiw_log("warning: %s is not a file; Proton cannot use this prefix\n", tracked);
+        goto out;
+    }
+    int has_guard = lstat(guard, &st) == 0;
+    int has_reg = is_file(sysreg);
+    if (has_guard && !has_reg) {
+        if (unlink(guard) == 0) {
+            rc = 1;
+            lsiw_log("the Proton prefix %s was never finished; Proton sets it up again\n", compat);
+        }
+    } else if (has_guard || has_reg) {
+        int fd = open(tracked, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0644);
+        if (fd >= 0) {
+            close(fd);
+            rc = 1;
+            lsiw_log("repaired the Proton prefix %s (its tracked_files list was missing)\n", compat);
+        } else if (errno != EEXIST)
+            lsiw_log("cannot create %s: %s\n", tracked, strerror(errno));
+    }
+    if (verbose && !rc) lsiw_log("Proton prefix %s: %s\n", compat, has_reg ? "set up" : "new");
+out:
+    free(sysreg);
+    free(guard);
+    free(tracked);
+    return rc;
+}
+
 int lsiw_proton_prepare(const char *compat, int verbose, char **mounts)
 {
+    lsiw_proton_repair_prefix(compat, verbose);
     if (lsiw_is_shared_compat(compat)) {
         /* The shared prefix: C: is the C: drive, which has everything. */
         lsiw_prefix_migrate(verbose);
@@ -513,9 +562,11 @@ static int proton_exec(const char *proton_dir, const char *verb, int argc, char 
     struct argvec a = { NULL, 0, 0 };
     char *appid = manifest_value(proton_dir, "require_tool_appid");
     char *runtime = appid ? lsiw_steam_app_dir(appid) : NULL;
-    if (appid && !runtime)
-        lsiw_log("warning: %s asks for the Steam Linux Runtime (app %s), which is not installed; "
-                 "starting it without the runtime\n", proton_dir, appid);
+    /* GE-Proton and similar builds run fine on the host; Valve's Proton
+     * is built for the runtime, so it is worth a warning there. */
+    if (appid && !runtime && (verbose || !getenv("UMU_ID")))
+        lsiw_log("%s: %s asks for the Steam Linux Runtime (app %s), which is not installed; "
+                 "starting it without the runtime\n", getenv("UMU_ID") ? "note" : "warning", proton_dir, appid);
     if (runtime) push_tool_command(&a, runtime, verb, "/_v2-entry-point --verb=%verb% --");
     push_tool_command(&a, proton_dir, verb, "/proton %verb%");
     for (int i = 0; i < argc; i++) av_push(&a, argv[i]);
@@ -577,33 +628,33 @@ int lsiw_proton_run(const char *linux_path, int argc, char **argv, int verbose)
     /* The shared prefix (or the program's own), never a leftover
      * STEAM_COMPAT_DATA_PATH of whatever started lsiw. */
     setenv("STEAM_COMPAT_DATA_PATH", lsiw_compat_dir(), 1);
-    if (!getenv("STEAM_COMPAT_CLIENT_INSTALL_PATH")) {
-        char **roots = lsiw_steam_roots();
-        char *client = roots && roots[0] ? lsiw_cli_strdup(roots[0])
-                                         : lsiw_cli_printf("%s/steam-client", lsiw_data_dir());
-        lsiw_mkdirs(client, 0755);
-        setenv("STEAM_COMPAT_CLIENT_INSTALL_PATH", client, 1);
-        free(client);
-        lsiw_strv_free(roots);
+    /* Proton copies Steam's glue (legacycompat/steamclient.dll ...) from
+     * the Steam client's folder; without Steam an empty folder will do. */
+    const char *cip = getenv("STEAM_COMPAT_CLIENT_INSTALL_PATH");
+    char *client = lsiw_steam_client_dir();
+    if (!cip || !*cip || !is_dir(cip)) {
+        char *c = client ? lsiw_cli_strdup(client) : lsiw_cli_printf("%s/steam-client", lsiw_data_dir());
+        lsiw_mkdirs(c, 0755);
+        setenv("STEAM_COMPAT_CLIENT_INSTALL_PATH", c, 1);
+        free(c);
     }
     setenv("SteamAppId", "0", 0);
     setenv("SteamGameId", "0", 0);
-    /* Proton starts programs through steam.exe, which needs the Steam
-     * client. GE-Proton (and other builds made for umu-launcher) can start
-     * them without it in umu mode; Valve's Proton cannot. */
+    /* GE-Proton and the other builds made for umu-launcher start programs
+     * without Steam in umu mode. Valve's Proton starts them through its
+     * steam.exe, which works outside Steam too, but programs that use
+     * Steam's API need the Steam client. */
     char *script = lsiw_cli_printf("%s/proton", r->path);
     char *text = lsiw_read_text(script);
-    int umu = text && strstr(text, "UMU_ID");
+    const char *umu_env = getenv("LSIW_PROTON_UMU");      /* 0: never umu mode (tests) */
+    int umu = text && strstr(text, "UMU_ID") && !(umu_env && !strcmp(umu_env, "0"));
     free(text);
     free(script);
     if (umu) setenv("UMU_ID", "umu-0", 0);
-    else {
-        char *so = lsiw_cli_printf("%s/ubuntu12_64/steamclient.so", getenv("STEAM_COMPAT_CLIENT_INSTALL_PATH"));
-        if (!is_file(so))
-            lsiw_log("warning: %s needs the Steam client to start programs outside Steam, and Steam is not "
-                     "installed; use GE-Proton ('lsiw runners install ge') instead\n", r->name);
-        free(so);
-    }
+    else if (!client && verbose)
+        lsiw_log("note: Steam is not installed; %s starts programs, but those that need Steam "
+                 "(its overlay, achievements, DRM) cannot reach it\n", r->name);
+    free(client);
     if (!verbose) setenv("WINEDEBUG", "-all", 0);
     if (verbose) lsiw_log("running with %s (%s)\n", r->name, r->path);
 
