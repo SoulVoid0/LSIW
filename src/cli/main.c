@@ -834,6 +834,7 @@ static int run_program(int argc, char **argv, int engine, int linux_only)
 
     if (engine == ENGINE_PROTON) {
         LSIW_TRACE("engine: proton\n");
+        lsiw_cli_identity(NULL, path);
         wine_args_from_cmdline(&argc, &argv);
         lsiw_proton_run(path, argc, argv, lsiw_verbose);   /* returns only on failure */
         free(path);
@@ -850,6 +851,7 @@ static int run_program(int argc, char **argv, int engine, int linux_only)
     LSIW_TRACE("engine: %s\n", use_wine ? "wine" : "native");
 
     if (use_wine) {
+        lsiw_cli_identity(NULL, path);
         wine_args_from_cmdline(&argc, &argv);
         lsiw_wine_run(path, argc, argv, lsiw_verbose);   /* returns only on failure */
         free(path);
@@ -863,6 +865,7 @@ static int run_program(int argc, char **argv, int engine, int linux_only)
         if (engine == ENGINE_AUTO && lsiw_wine_binary()) {
             fprintf(stderr, "lsiw: using the Wine fallback: the native engine cannot load %s (%s)\n", arg, why);
             free(why);
+            lsiw_cli_identity(NULL, path);
             wine_args_from_cmdline(&argc, &argv);
             lsiw_wine_run(path, argc, argv, lsiw_verbose);
             free(path);

@@ -120,9 +120,9 @@ Every release also has installers that do everything for you:
 | `lsiw-VERSION-offline-installer-rpm.run` / `-deb.run` / `-appimage.run` | one format | Fedora & co. / Debian & co. / any distribution, no network needed |
 
 ```sh
-sh lsiw-1.10.0-offline-installer-deb.run           # install (same options as install.sh)
-sh lsiw-1.10.0-offline-installer-deb.run --verify  # only check the file
-sh lsiw-1.10.0-offline-installer.run --extract dir # only unpack the packages
+sh lsiw-1.10.1-offline-installer-deb.run           # install (same options as install.sh)
+sh lsiw-1.10.1-offline-installer-deb.run --verify  # only check the file
+sh lsiw-1.10.1-offline-installer.run --extract dir # only unpack the packages
 ```
 
 Offline installers check their payload and every package against the
@@ -169,19 +169,19 @@ GitHub release, so they are not a signature.
 ### Fedora, RHEL, openSUSE (.rpm)
 
 ```sh
-sudo dnf install ./lsiw-1.10.0-1.x86_64.rpm ./lsiw-control-1.10.0-1.x86_64.rpm
+sudo dnf install ./lsiw-1.10.1-1.x86_64.rpm ./lsiw-control-1.10.1-1.x86_64.rpm
 sudo dnf install wine        # optional: the fallback engine
 # openSUSE: sudo zypper install --allow-unsigned-rpm ./lsiw-*.rpm
 ```
 
 The prebuilt RPMs need glibc 2.38 (Fedora 39 or newer). On older systems
-rebuild them: `rpmbuild --rebuild lsiw-1.10.0-1.src.rpm` (or let
+rebuild them: `rpmbuild --rebuild lsiw-1.10.1-1.src.rpm` (or let
 `install.sh` do it).
 
 ### Debian, Ubuntu, Mint (.deb)
 
 ```sh
-sudo apt install ./lsiw_1.10.0-1_amd64.deb ./lsiw-control_1.10.0-1_amd64.deb
+sudo apt install ./lsiw_1.10.1-1_amd64.deb ./lsiw-control_1.10.1-1_amd64.deb
 ```
 
 `lsiw` runs on Debian 11, Ubuntu 20.04 and newer. LSIW Control needs GTK
@@ -192,10 +192,10 @@ install `lsiw_*.deb` alone and use the command line. Remove with
 ### Any distribution (.AppImage)
 
 ```sh
-chmod +x LSIW-1.10.0-x86_64.AppImage
-./LSIW-1.10.0-x86_64.AppImage                      # opens LSIW Control
-./LSIW-1.10.0-x86_64.AppImage run setup.exe        # any lsiw command
-ln -s "$PWD/LSIW-1.10.0-x86_64.AppImage" ~/.local/bin/lsiw   # a normal `lsiw` command
+chmod +x LSIW-1.10.1-x86_64.AppImage
+./LSIW-1.10.1-x86_64.AppImage                      # opens LSIW Control
+./LSIW-1.10.1-x86_64.AppImage run setup.exe        # any lsiw command
+ln -s "$PWD/LSIW-1.10.1-x86_64.AppImage" ~/.local/bin/lsiw   # a normal `lsiw` command
 ```
 
 The AppImage holds `lsiw`, LSIW Control and the GTK 4 libraries, so it
@@ -423,6 +423,15 @@ While several run, *Stop* is a menu with an entry for each, including
 library programs started from an LSIW shortcut or the applications menu,
 and *Stop all*. Stopping one ends all of its processes but never the
 wineserver and Wine services the others share.
+
+**Each program on its own in the taskbar and System Monitor.** Every
+program gets its own window class under Proton (`steam_app_N`, from an
+app ID of its own), a desktop entry with its name and icon (its menu
+shortcut, or a hidden `lsiw.ID.desktop`) and, with systemd, a user scope
+of its own (`app-lsiw-<desktop ID>-<random>.scope`), so taskbars give each
+program its own entry and icon and System Monitor lists each one under
+Applications with its own memory and CPU use. `LSIW_NO_IDENTITY=1` turns
+this off.
 
 **Play time.** Every start of a library program is counted: `lsiw
 programs run`, LSIW shortcuts (.lwlnk), *Launch* in LSIW Control and

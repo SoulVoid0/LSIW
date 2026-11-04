@@ -591,6 +591,7 @@ int lsiw_cli_program_run(struct lsiw_program *p, int argc, char **argv)
     for (int i = 0; i < argc; i++) av[k++] = argv[i];
     av[k] = NULL;
     if (lsiw_verbose) lsiw_log("starting %s (%s)\n", p->name, p->id);
+    lsiw_cli_identity(p, NULL);
     return run_tracked(p, k, av);
 }
 
@@ -642,12 +643,19 @@ static int program_shortcut(struct lsiw_program *p, int desktop, int remove)
         if (unlink(on_desktop) == 0) printf("removed %s\n", on_desktop);
         goto out;
     }
+    /* The hidden entry a run made (lsiw_cli_identity) gives way to it. */
+    char *hidden = lsiw_cli_strdup(file);
+    char *dash = strrchr(hidden, '/');
+    if (dash && !strncmp(dash + 1, "lsiw-", 5)) { dash[5] = '.'; unlink(hidden); }
+    free(hidden);
     char *lsiw = self_path();
     char *name = desktop_escape(p->name);
     char *workdir = *p->workdir ? lsiw_cli_strdup(p->workdir) : lsiw_cli_strdup(p->exe);
     if (!*p->workdir) { char *sl = strrchr(workdir, '/'); if (sl && sl != workdir) *sl = 0; }
     /* The icon inside the program (or the one chosen), as a PNG. */
     char *icon = lsiw_program_icon(p, 1);
+    /* How taskbars know the program's windows belong to this launcher. */
+    char *wmclass = lsiw_cli_window_class(p->id);
     char *text = lsiw_cli_printf(
         "[Desktop Entry]\n"
         "Type=Application\n"
@@ -659,9 +667,11 @@ static int program_shortcut(struct lsiw_program *p, int desktop, int remove)
         "Terminal=false\n"
         "StartupNotify=true\n"
         "Categories=Wine;\n"
+        "StartupWMClass=%s\n"
         "X-LSIW-Program=%s\n",
-        name, lsiw, p->id, workdir, icon ? icon : *p->icon ? p->icon : "lsiw", p->id);
+        name, lsiw, p->id, workdir, icon ? icon : *p->icon ? p->icon : "lsiw", wmclass, p->id);
     free(icon);
+    free(wmclass);
     char *parent = lsiw_cli_strdup(file);
     *strrchr(parent, '/') = 0;
     lsiw_mkdirs(parent, 0755);
@@ -848,6 +858,10 @@ int lsiw_cmd_programs(int argc, char **argv)
         if (!rc) print_program(p, 1);
     } else if (!strcmp(sub, "remove")) {
         program_shortcut(p, 0, 1);
+        char *df = lsiw_program_desktop_file(p);      /* and the hidden entry of its runs */
+        char *sl = strrchr(df, '/');
+        if (sl && !strncmp(sl + 1, "lsiw-", 5)) { sl[5] = '.'; unlink(df); }
+        free(df);
         lsiw_program_remove(p->id);
         rc = save();
         if (!rc) lsiw_playtime_reset(p->id);

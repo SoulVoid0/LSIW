@@ -148,11 +148,11 @@ sudo dnf install ./build/rpmbuild/RPMS/x86_64/lsiw-*.rpm
 `build/rpmbuild`. It stops early if `Version:` in `lsiw.spec` and
 `LSIW_VERSION` in `include/lsiw.h` disagree. The results:
 
-* `build/rpmbuild/RPMS/x86_64/lsiw-1.10.0-1.fcNN.x86_64.rpm`: `lsiw`, the
+* `build/rpmbuild/RPMS/x86_64/lsiw-1.10.1-1.fcNN.x86_64.rpm`: `lsiw`, the
   binfmt rule, desktop integration, `/etc/lsiw/lsiw.conf`, documentation;
 * `build/rpmbuild/RPMS/x86_64/lsiw-control-1.6.0-1.fcNN.x86_64.rpm`: the
   settings app;
-* the matching debuginfo packages and `build/rpmbuild/SRPMS/lsiw-1.10.0-1.fcNN.src.rpm`.
+* the matching debuginfo packages and `build/rpmbuild/SRPMS/lsiw-1.10.1-1.fcNN.src.rpm`.
 
 The package builds with Fedora's standard compiler flags, applies the
 binfmt rule in `%post` (`%binfmt_apply`), and removes it from the running
@@ -194,7 +194,7 @@ Steam tools and shortcuts, never the temporary mount point.
 ## Source tarball
 
 ```sh
-make dist      # lsiw-1.10.0.tar.gz
+make dist      # lsiw-1.10.1.tar.gz
 ```
 
 In a git checkout the tarball is made with `git archive` from the current
