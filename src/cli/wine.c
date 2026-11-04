@@ -1558,6 +1558,29 @@ static void wine_d3d(const char *prefix, int verbose)
 
 int lsiw_wine_run(const char *linux_path, int argc, char **argv, int verbose)
 {
+    /* Another program runs in this prefix right now: use its Wine (a
+     * wineserver serves only its own build), or its Proton. */
+    char *server = lsiw_prefix_server(lsiw_prefix_dir());
+    if (server) {
+        struct lsiw_runner *o = lsiw_server_runner(server);
+        const char *cur = lsiw_wine_binary();
+        char *rcur = cur ? realpath(cur, NULL) : NULL, *ro = o ? realpath(o->path, NULL) : NULL;
+        if (o && o->kind == LSIW_RUNNER_PROTON) {
+            lsiw_log("note: %s is in use by %s right now; starting this program with it too "
+                     "(one prefix runs one Wine version at a time)\n", lsiw_prefix_dir(), o->name);
+            lsiw_setting_set("engine", "proton", o->id);       /* in memory only */
+            free(rcur); free(ro); free(server);
+            lsiw_runner_free(o);
+            return lsiw_proton_run(linux_path, argc, argv, verbose);
+        }
+        if (o && (!cur || (rcur && ro ? strcmp(rcur, ro) : strcmp(cur, o->path)))) {
+            lsiw_log("note: %s is in use by %s right now; starting this program with it too "
+                     "(one prefix runs one Wine version at a time)\n", lsiw_prefix_dir(), o->name);
+            lsiw_setting_set("engine", "wine", o->path);       /* in memory only */
+        }
+        free(rcur); free(ro); free(server);
+        lsiw_runner_free(o);
+    }
     const char *wine = lsiw_wine_binary();
     if (!wine) {
         lsiw_log("Wine is not installed, so the Wine fallback is not available (on Fedora: sudo dnf install wine)\n");
@@ -1621,8 +1644,8 @@ int lsiw_wine_run(const char *linux_path, int argc, char **argv, int verbose)
         fputc('\n', stderr);
     }
     fflush(NULL);
-    /* exec, not fork: the program's exit code becomes ours. */
-    execv(wine, wargv);
+    /* The program's exit code becomes ours. */
+    lsiw_exec_instance(wine, wargv);
     int e = errno;
     lsiw_log("cannot start %s: %s\n", wine, strerror(e));
     for (int i = first_arg; wargv[i]; i++) free(wargv[i]);

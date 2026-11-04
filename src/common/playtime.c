@@ -278,6 +278,51 @@ void lsiw_playtime_reset(const char *id)
     unlock_dir(fd);
 }
 
+size_t lsiw_playtime_live(struct lsiw_live_session **out)
+{
+    *out = NULL;
+    char *dir = lsiw_playtime_dir();
+    struct stat st;
+    if (stat(dir, &st) < 0) { free(dir); return 0; }
+    int fd = lock_dir();
+    sweep(NULL);                      /* stale sessions go first */
+    DIR *d = opendir(dir);
+    size_t n = 0, cap = 0;
+    struct lsiw_live_session *v = NULL;
+    struct dirent *e;
+    while (d && (e = readdir(d))) {
+        char *dot = strstr(e->d_name, ".run.");
+        if (!dot || e->d_name[0] == '.') continue;
+        char *path = lsiw_strdup_printf("%s/%s", dir, e->d_name);
+        char *t = lsiw_read_text(path);
+        free(path);
+        if (!t) continue;
+        long pid = (long)kv_ll(t, "pid");
+        long long start = kv_ll(t, "start");
+        free(t);
+        if (pid <= 0) continue;
+        if (n == cap) {
+            cap = cap ? cap * 2 : 8;
+            v = realloc(v, cap * sizeof *v);
+        }
+        v[n].id = strndup(e->d_name, (size_t)(dot - e->d_name));
+        v[n].pid = pid;
+        v[n].start = start;
+        n++;
+    }
+    if (d) closedir(d);
+    unlock_dir(fd);
+    free(dir);
+    *out = v;
+    return n;
+}
+
+void lsiw_playtime_live_free(struct lsiw_live_session *v, size_t n)
+{
+    for (size_t i = 0; i < n; i++) free(v[i].id);
+    free(v);
+}
+
 long long lsiw_playtime_stamp(void)
 {
     char *dir = lsiw_playtime_dir();

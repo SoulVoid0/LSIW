@@ -18,7 +18,7 @@
 %global lsiw_make_vars GUI=yes CC="%{__cc}" CFLAGS="%{build_cflags}" LDFLAGS="%{build_ldflags}" PREFIX=%{_prefix} BINDIR=%{_bindir} LIBEXECDIR=%{_libexecdir} DATADIR=%{_datadir} SYSCONFDIR=%{_sysconfdir} BINFMTDIR=%{_binfmtdir} TMPFILESDIR=%{_tmpfilesdir} METAINFODIR=%{_metainfodir}
 
 Name:           lsiw
-Version:        1.9.1
+Version:        1.10.0
 Release:        1%{?dist}
 Summary:        Run Windows x86-64 programs on Linux with a native engine
 
@@ -147,6 +147,15 @@ update-desktop-database -q %{_datadir}/applications &>/dev/null || :
 %{_metainfodir}/io.github.lsiw.Control.metainfo.xml
 
 %changelog
+* Wed Nov 04 2026 The LSIW contributors - 1.10.0-1
+- Run several programs at once: a program started while another runs in
+  the same prefix no longer waits for it (Proton "run", the prefix's running
+  Proton or Wine version is used)
+- LSIW Control: Launch and Run stay available while programs run; Stop is
+  a menu of the running programs (also those started from .lwlnk
+  shortcuts) when more than one runs
+- Each program ends and stops on its own (LSIW_INSTANCE watcher)
+
 * Wed Nov 04 2026 The LSIW contributors - 1.9.1-1
 - Fix programs not starting with Proton (FileNotFoundError tracked_files):
   prefixes without Proton's tracked_files list are repaired

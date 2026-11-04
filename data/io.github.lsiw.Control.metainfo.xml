@@ -53,6 +53,13 @@
   </supports>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="1.10.0" date="2026-11-04">
+      <description>
+        <p>Run several programs and games at once. Starting one while another runs no longer hangs
+        (it waited for the first one to end, also when that one was started from an LSIW shortcut), and
+        Stop becomes a menu of the running programs, so each one can be stopped on its own.</p>
+      </description>
+    </release>
     <release version="1.9.1" date="2026-11-04">
       <description>
         <p>Programs start with Proton again: prefixes Proton stopped on with "FileNotFoundError:
