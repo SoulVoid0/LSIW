@@ -48,12 +48,14 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
 #include <sys/stat.h>
 #include <sys/utsname.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -463,6 +465,351 @@ int lsiw_proton_unlink(const char *compat, int verbose)
 }
 
 /* ------------------------------------------------------------------ */
+/* A prefix in use                                                      */
+/* ------------------------------------------------------------------ */
+
+/* Two programs can share a prefix only through one wineserver, and so one
+ * Wine build: a wineserver accepts clients of its own protocol version
+ * only. Wine names the server's folder after the prefix's device and inode
+ * (/tmp/.wine-UID/server-DEV-INODE) and the wineserver works in it, so the
+ * server of a prefix is the wineserver process whose working directory has
+ * that name. This also finds a server inside Steam's runtime container,
+ * which shares /tmp. */
+char *lsiw_prefix_server(const char *pfx)
+{
+    struct stat st;
+    if (!pfx || stat(pfx, &st) < 0) return NULL;
+    char want[96];
+    snprintf(want, sizeof want, "server-%lx-%lx", (unsigned long)st.st_dev, (unsigned long)st.st_ino);
+    DIR *d = opendir("/proc");
+    if (!d) return NULL;
+    char *found = NULL;
+    struct dirent *de;
+    uid_t me = getuid();
+    while (!found && (de = readdir(d))) {
+        if (!isdigit((unsigned char)de->d_name[0])) continue;
+        char path[320];
+        snprintf(path, sizeof path, "/proc/%s", de->d_name);
+        if (stat(path, &st) < 0 || st.st_uid != me) continue;
+        snprintf(path, sizeof path, "/proc/%s/cwd", de->d_name);
+        char *cwd = lsiw_cli_readlink(path);
+        const char *base = cwd ? strrchr(cwd, '/') : NULL;
+        if (base && !strcmp(base + 1, want)) {
+            snprintf(path, sizeof path, "/proc/%s/exe", de->d_name);
+            char *exe = lsiw_cli_readlink(path);
+            const char *eb = exe ? strrchr(exe, '/') : NULL;
+            /* "wineserver", "wineserver64", "wineserver (deleted)" */
+            if (eb && !strncmp(eb + 1, "wineserver", 10)) {
+                size_t n = strlen(exe);
+                if (n > 10 && !strcmp(exe + n - 10, " (deleted)")) exe[n - 10] = 0;
+                found = exe;
+                exe = NULL;
+            }
+            free(exe);
+        }
+        free(cwd);
+    }
+    closedir(d);
+    return found;
+}
+
+static int path_under(const char *path, const char *dir)
+{
+    char *real = realpath(dir, NULL);
+    const char *d = real ? real : dir;
+    size_t n = strlen(d);
+    int ok = n && !strncmp(path, d, n) && path[n] == '/';
+    if (!ok && real) ok = !strncmp(path, dir, strlen(dir)) && path[strlen(dir)] == '/';
+    free(real);
+    return ok;
+}
+
+struct lsiw_runner *lsiw_server_runner(const char *server_exe)
+{
+    if (!server_exe) return NULL;
+    struct lsiw_runner *v, *res = NULL;
+    size_t n = lsiw_runners(LSIW_RUNNER_PROTON, &v);
+    for (size_t i = 0; i < n && !res; i++) {
+        if (!path_under(server_exe, v[i].path)) continue;
+        res = calloc(1, sizeof *res);
+        *res = v[i];
+        memset(&v[i], 0, sizeof v[i]);
+    }
+    lsiw_runners_free(v, n);
+    if (res) return res;
+    /* Wine: the wineserver next to the wine program (or to what that is
+     * a link to: /usr/bin/wine -> /usr/lib/wine/wine). */
+    char *sdir = lsiw_cli_strdup(server_exe);
+    char *slash = strrchr(sdir, '/');
+    if (slash) *slash = 0;
+    n = lsiw_runners(LSIW_RUNNER_WINE, &v);
+    for (size_t i = 0; i < n && !res; i++) {
+        char *cands[2] = { lsiw_cli_strdup(v[i].path), realpath(v[i].path, NULL) };
+        for (int k = 0; k < 2 && !res; k++) {
+            if (!cands[k]) continue;
+            char *s = strrchr(cands[k], '/');
+            if (s) *s = 0;
+            if (!strcmp(cands[k], sdir)) {
+                res = calloc(1, sizeof *res);
+                *res = v[i];
+                memset(&v[i], 0, sizeof v[i]);
+            }
+        }
+        free(cands[0]);
+        free(cands[1]);
+    }
+    lsiw_runners_free(v, n);
+    free(sdir);
+    return res;
+}
+
+/* ------------------------------------------------------------------ */
+/* One instance of a program                                            */
+/* ------------------------------------------------------------------ */
+
+#define INSTANCE_VAR "LSIW_INSTANCE"
+
+enum { PROC_SYSTEM, PROC_HELPER, PROC_PROGRAM };
+
+/* Wine's own processes: the wineserver and the services every program of
+ * the prefix shares (started by whichever program came first). */
+static const char *const system_exes[] = {
+    "services.exe", "winedevice.exe", "plugplay.exe", "svchost.exe", "rpcss.exe", "lsass.exe",
+    "explorer.exe", "tabtip.exe", "wineboot.exe", "winemenubuilder.exe", "mscorsvw.exe", NULL
+};
+/* What starts or hosts a program but is not the program. */
+static const char *const helper_exes[] = {
+    "umu.exe", "steam.exe", "conhost.exe", "start.exe", "xalia.exe", NULL
+};
+
+static char *read_proc_file(const char *pid, const char *what, size_t *len)
+{
+    char path[320];
+    snprintf(path, sizeof path, "/proc/%s/%s", pid, what);
+    int fd = open(path, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return NULL;
+    size_t cap = 4096, n = 0;
+    char *buf = malloc(cap + 1);
+    for (;;) {
+        if (n == cap) { cap *= 2; buf = realloc(buf, cap + 1); }
+        ssize_t r = read(fd, buf + n, cap - n);
+        if (r < 0 && errno == EINTR) continue;
+        if (r <= 0) break;
+        n += (size_t)r;
+    }
+    close(fd);
+    buf[n] = 0;
+    *len = n;
+    return buf;
+}
+
+static int in_names(const char *const *list, const char *name)
+{
+    for (int i = 0; list[i]; i++) if (!strcasecmp(list[i], name)) return 1;
+    return 0;
+}
+
+/* Which kind of process of an instance PID is (its argv[0]). */
+static int proc_kind(const char *pid)
+{
+    size_t len;
+    char *cmd = read_proc_file(pid, "cmdline", &len);
+    char path[320];
+    snprintf(path, sizeof path, "/proc/%s/exe", pid);
+    char *exe = lsiw_cli_readlink(path);
+    const char *eb = exe ? strrchr(exe, '/') : NULL;
+    int kind = PROC_HELPER;
+    if (eb && !strncmp(eb + 1, "wineserver", 10)) kind = PROC_SYSTEM;
+    else if (cmd && len) {
+        /* Wine shows a Windows program's own path: C:\windows\...\x.exe */
+        const char *a0 = cmd;
+        int windows = isalpha((unsigned char)a0[0]) && a0[1] == ':' && a0[2] == '\\';
+        if (windows) {
+            const char *b = strrchr(a0, '\\');
+            b = b ? b + 1 : a0;
+            if (in_names(system_exes, b)) kind = PROC_SYSTEM;
+            else if (!in_names(helper_exes, b)) kind = PROC_PROGRAM;
+        }
+    }
+    free(exe);
+    free(cmd);
+    return kind;
+}
+
+struct iproc { pid_t pid; int kind; };
+
+/* The processes whose environment has LSIW_INSTANCE=TAG. */
+static size_t instance_procs(const char *tag, struct iproc **out)
+{
+    *out = NULL;
+    char needle[128];
+    int nl = snprintf(needle, sizeof needle, INSTANCE_VAR "=%s", tag) + 1;   /* with its NUL */
+    DIR *d = opendir("/proc");
+    if (!d) return 0;
+    size_t n = 0, cap = 0;
+    struct iproc *v = NULL;
+    pid_t self = getpid();
+    uid_t me = getuid();
+    struct dirent *de;
+    while ((de = readdir(d))) {
+        if (!isdigit((unsigned char)de->d_name[0])) continue;
+        pid_t pid = (pid_t)atol(de->d_name);
+        if (pid == self) continue;
+        char path[320];
+        struct stat st;
+        snprintf(path, sizeof path, "/proc/%s", de->d_name);
+        if (stat(path, &st) < 0 || st.st_uid != me) continue;
+        size_t len;
+        char *env = read_proc_file(de->d_name, "environ", &len);
+        int ours = 0;
+        for (size_t off = 0; env && off < len; off += strlen(env + off) + 1)
+            if (len - off >= (size_t)nl && !memcmp(env + off, needle, (size_t)nl)) { ours = 1; break; }
+        free(env);
+        if (!ours) continue;
+        if (n == cap) { cap = cap ? cap * 2 : 16; v = realloc(v, cap * sizeof *v); }
+        v[n].pid = pid;
+        v[n].kind = proc_kind(de->d_name);
+        n++;
+    }
+    closedir(d);
+    *out = v;
+    return n;
+}
+
+/* Signal every process of the instance but Wine's shared ones; with
+ * helpers_only, the helpers alone. Returns how many programs run. */
+static int signal_instance(const char *tag, int sig, int helpers_only)
+{
+    struct iproc *v;
+    size_t n = instance_procs(tag, &v);
+    int programs = 0;
+    for (size_t i = 0; i < n; i++) {
+        if (v[i].kind == PROC_PROGRAM) programs++;
+        if (v[i].kind == PROC_SYSTEM) continue;
+        if (helpers_only && v[i].kind != PROC_HELPER) continue;
+        if (sig) kill(v[i].pid, sig);
+    }
+    free(v);
+    return programs;
+}
+
+static double now_mono(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec + ts.tv_nsec / 1e9;
+}
+
+int lsiw_exec_instance(const char *file, char **argv)
+{
+    const char *off = getenv("LSIW_NO_INSTANCE");       /* tests, debugging: plain exec */
+    if (off && *off && strcmp(off, "0")) {
+        fflush(NULL);
+        execv(file, argv);
+        return -1;
+    }
+    char tag[64];
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    snprintf(tag, sizeof tag, "%ld-%lld%09ld", (long)getpid(), (long long)ts.tv_sec, ts.tv_nsec);
+    setenv(INSTANCE_VAR, tag, 1);
+
+    sigset_t set, old;
+    sigemptyset(&set);
+    sigaddset(&set, SIGCHLD);
+    sigaddset(&set, SIGTERM);
+    sigaddset(&set, SIGINT);
+    sigaddset(&set, SIGHUP);
+    sigaddset(&set, SIGQUIT);
+    sigprocmask(SIG_BLOCK, &set, &old);
+    fflush(NULL);
+    int ready[2];
+    if (pipe2(ready, O_CLOEXEC) < 0) ready[0] = ready[1] = -1;
+    pid_t child = fork();
+    if (child < 0) {
+        sigprocmask(SIG_SETMASK, &old, NULL);
+        execv(file, argv);
+        return -1;
+    }
+    if (child == 0) {
+        sigprocmask(SIG_SETMASK, &old, NULL);
+        if (ready[0] >= 0) close(ready[0]);
+        execv(file, argv);
+        int e = errno;
+        if (ready[1] >= 0 && write(ready[1], &e, sizeof e) < 0) {}
+        _exit(127);
+    }
+    if (ready[1] >= 0) close(ready[1]);
+    int exec_err = 0;
+    if (ready[0] >= 0) {
+        ssize_t r;
+        while ((r = read(ready[0], &exec_err, sizeof exec_err)) < 0 && errno == EINTR) ;
+        if (r != (ssize_t)sizeof exec_err) exec_err = 0;
+        close(ready[0]);
+    }
+    if (exec_err) {
+        waitpid(child, NULL, 0);
+        sigprocmask(SIG_SETMASK, &old, NULL);
+        errno = exec_err;
+        return -1;
+    }
+
+    int status = 0, child_done = 0, seen = 0, ended = 0;
+    int stops = 0;
+    double last_stop = 0, gone_since = 0;
+    for (;;) {
+        struct timespec tick = { 0, 500 * 1000 * 1000 };
+        siginfo_t si;
+        int sig = sigtimedwait(&set, &si, &tick);
+        if (!child_done && waitpid(child, &status, WNOHANG) == child) child_done = 1;
+        double t = now_mono();
+        if (sig == SIGTERM || sig == SIGINT || sig == SIGHUP || sig == SIGQUIT) {
+            /* The same request often arrives twice (to the process group
+             * and passed on by the play-time watcher): a second one counts
+             * from a second later on, and forces the stop. */
+            if (!stops || t - last_stop >= 1.0) {
+                stops++;
+                last_stop = t;
+                signal_instance(tag, stops > 1 ? SIGKILL : sig, 0);
+            }
+        }
+        if (stops) {
+            int left = signal_instance(tag, 0, 0);
+            if (child_done && !left) break;
+            if (t - last_stop >= 5.0) {        /* not stopping: force it */
+                signal_instance(tag, SIGKILL, 0);
+                if (!child_done) kill(child, SIGKILL);
+                last_stop = t;
+                stops++;
+            }
+            continue;
+        }
+        if (child_done) break;
+        /* Proton's umu.exe and steam.exe wait until every program of the
+         * prefix has ended, those of other instances too: when this
+         * instance's programs are gone, it has ended. */
+        int programs = signal_instance(tag, 0, 0);
+        if (programs) { seen = 1; gone_since = 0; continue; }
+        if (!seen) continue;
+        if (!gone_since) gone_since = t;
+        else if (t - gone_since >= 3.0 && !ended) {
+            ended = 1;
+            signal_instance(tag, SIGTERM, 1);
+        } else if (ended && t - gone_since >= 8.0) {
+            signal_instance(tag, SIGKILL, 1);
+            kill(child, SIGKILL);
+        }
+    }
+    sigprocmask(SIG_SETMASK, &old, NULL);
+    int rc;
+    if (ended && !stops) rc = 0;                     /* its own exit code is not known */
+    else if (WIFEXITED(status)) rc = WEXITSTATUS(status);
+    else rc = 128 + WTERMSIG(status);
+    fflush(NULL);
+    exit(rc);
+}
+
+/* ------------------------------------------------------------------ */
 /* Starting Proton                                                      */
 /* ------------------------------------------------------------------ */
 
@@ -584,7 +931,7 @@ static int proton_exec(const char *proton_dir, const char *verb, int argc, char 
         fputc('\n', stderr);
     }
     fflush(NULL);
-    execv(a.v[0], a.v);
+    lsiw_exec_instance(a.v[0], a.v);
     lsiw_log("cannot start %s: %s\n", a.v[0], strerror(errno));
     return -1;
 }
@@ -624,6 +971,40 @@ int lsiw_proton_run(const char *linux_path, int argc, char **argv, int verbose)
         else lsiw_log("no Proton is installed: install one in Steam, or run 'lsiw runners install ge'\n");
         errno = ENOENT;
         return -1;
+    }
+    /* Another program already runs in this prefix (a game started from its
+     * .lwlnk, a second Launch in LSIW Control): this one joins it instead
+     * of waiting for it to end ("waitforexitandrun" waits for the
+     * prefix's wineserver to exit), and with the Wine build that runs it,
+     * since a wineserver serves only its own build and Proton would
+     * otherwise also rewrite the prefix under the running program. */
+    const char *verb = "waitforexitandrun";
+    char *server = lsiw_prefix_server(lsiw_prefix_dir());
+    if (server) {
+        verb = "run";
+        struct lsiw_runner *o = lsiw_server_runner(server);
+        if (o && o->kind == LSIW_RUNNER_WINE) {
+            lsiw_log("note: %s is in use by %s right now; starting this program with it too "
+                     "(one prefix runs one Wine version at a time)\n", lsiw_prefix_dir(), o->name);
+            lsiw_setting_set("engine", "wine", o->path);       /* in memory only */
+            lsiw_runner_free(o);
+            lsiw_runner_free(r);
+            free(server);
+            return lsiw_wine_run(linux_path, argc, argv, verbose);
+        }
+        if (o && !same_dir(o->path, r->path)) {
+            lsiw_log("note: %s is in use by %s right now; starting this program with it instead of %s "
+                     "(one prefix runs one Wine version at a time)\n", lsiw_prefix_dir(), o->name, r->name);
+            lsiw_runner_free(r);
+            r = o;
+        } else if (o) {
+            if (verbose) lsiw_log("%s is in use by another program; this one joins it\n", lsiw_prefix_dir());
+            lsiw_runner_free(o);
+        } else {
+            lsiw_log("warning: %s is in use by a Wine LSIW does not know (%s); "
+                     "this program may not start until that one ends\n", lsiw_prefix_dir(), server);
+        }
+        free(server);
     }
     /* The shared prefix (or the program's own), never a leftover
      * STEAM_COMPAT_DATA_PATH of whatever started lsiw. */
@@ -678,7 +1059,7 @@ int lsiw_proton_run(const char *linux_path, int argc, char **argv, int verbose)
             args[i] = w;
         } else args[i] = lsiw_cli_strdup(s);
     }
-    proton_exec(r->path, "waitforexitandrun", argc, args, verbose);
+    proton_exec(r->path, verb, argc, args, verbose);
     lsiw_runner_free(r);
     return -1;
 }

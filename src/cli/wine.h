@@ -78,6 +78,23 @@ int lsiw_proton_repair_prefix(const char *compat, int verbose);
 int lsiw_proton_unlink(const char *compat, int verbose);
 /* Run a program with Proton in LSIW's Proton prefix; like lsiw_wine_run. */
 int lsiw_proton_run(const char *linux_path, int argc, char **argv, int verbose);
+/* The wineserver running for the Wine prefix PFX (another program that
+ * uses it right now): the path of its executable, NULL when none runs.
+ * Caller frees. */
+char *lsiw_prefix_server(const char *pfx);
+/* The installed runner a running wineserver belongs to (a Proton folder or
+ * a Wine version), NULL when LSIW does not know it. Free with
+ * lsiw_runner_free. */
+struct lsiw_runner *lsiw_server_runner(const char *server_exe);
+/* Run FILE ARGV as one instance: its processes, Windows programs included
+ * (Wine starts each in a session of its own), carry LSIW_INSTANCE in their
+ * environment. This process stays as the watcher: SIGTERM, SIGINT and
+ * SIGHUP stop every process of the instance (but not the wineserver or
+ * Wine's services, which other programs of the prefix share), and when
+ * its programs have ended while Proton still waits for others in the
+ * prefix, the instance ends too. Exits with the program's exit status;
+ * returns only when it could not start it. */
+int lsiw_exec_instance(const char *file, char **argv);
 /* Add (add=1) or remove the "LSIW Proton" tools in every Steam found. */
 int lsiw_steam_integrate(int add, int verbose);
 int lsiw_cmd_steam(int argc, char **argv);

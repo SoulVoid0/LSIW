@@ -127,10 +127,29 @@ void lsiw_task_set_callbacks(LsiwTask *r, LsiwTaskFunc state_changed,
  * (NULL: inherit). Returns FALSE (and reports why in the view) if it
  * could not be started or another run is active. */
 gboolean lsiw_task_start(LsiwTask *r, const char *const *argv, const char *cwd);
+/* Like lsiw_task_start; with lsiw_task_set_multi, while other runs are
+ * active too. label names the run in the status line and the output
+ * (NULL: the command); tag comes back from lsiw_task_last_tag when it
+ * ends. Returns the run's id, 0 when it could not be started. */
+guint lsiw_task_start_full(LsiwTask *r, const char *const *argv, const char *cwd,
+                           const char *label, int tag);
+/* Allow several runs at once; their output is told apart by labels. */
+void lsiw_task_set_multi(LsiwTask *r, gboolean multi);
 gboolean lsiw_task_running(LsiwTask *r);
+/* The active runs: how many, and the id, label and pid of the i-th. */
+guint lsiw_task_count(LsiwTask *r);
+guint lsiw_task_run_id(LsiwTask *r, guint i);
+const char *lsiw_task_run_label(LsiwTask *r, guint i);
+int lsiw_task_run_pid(LsiwTask *r, guint i);
+/* Of the last finished run: its tag and label. */
+int lsiw_task_last_tag(LsiwTask *r);
+const char *lsiw_task_last_label(LsiwTask *r);
+/* Stop one run (as lsiw_task_stop does all). */
+void lsiw_task_stop_run(LsiwTask *r, guint id);
 /* Of the last finished run: TRUE and the exit code if it exited normally. */
 gboolean lsiw_task_exit_code(LsiwTask *r, int *code);
-/* First call: SIGTERM to the process group; later calls: SIGKILL. */
+/* Every active run. First call: SIGTERM to the process group; later
+ * calls: SIGKILL. */
 void lsiw_task_stop(LsiwTask *r);
 void lsiw_task_clear(LsiwTask *r);
 void lsiw_task_append(LsiwTask *r, const char *text);

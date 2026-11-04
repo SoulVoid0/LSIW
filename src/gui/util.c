@@ -456,13 +456,20 @@ struct LsiwTask {
     GtkLabel *status;
     LsiwTaskFunc state_changed, finished;
     gpointer data;
-    struct run *run;           /* the active run, or NULL */
+    GPtrArray *runs;           /* the active runs (each a reference) */
+    struct run *writer;        /* the run whose output came last (weak) */
+    gboolean multi;            /* several runs at once */
+    guint next_id;
     gboolean have_code;
     int code;
+    int last_tag;
+    char *last_label;
 };
 
 struct run {
     LsiwTask *runner;        /* reference held */
+    guint id;
+    int tag;
     GSubprocess *proc;
     GInputStream *out;
     GCancellable *cancel;
@@ -470,12 +477,14 @@ struct run {
     gboolean eof, exited, done;
     guint drain_id;
     int stops;
-    char *what;                /* command name for the status line */
+    char *what;                /* the name for the status line and the output */
 };
 
 static void runner_release(LsiwTask *r)
 {
     g_object_unref(r->buffer);
+    g_ptr_array_unref(r->runs);
+    g_free(r->last_label);
 }
 
 static struct run *run_ref(struct run *run) { return g_rc_box_acquire(run); }
@@ -508,8 +517,32 @@ static void runner_insert(LsiwTask *r, const char *text, gssize len)
     gtk_text_view_scroll_mark_onscreen(r->view, r->end_mark);
 }
 
+static gboolean at_line_start(LsiwTask *r)
+{
+    GtkTextIter end;
+    gtk_text_buffer_get_end_iter(r->buffer, &end);
+    if (gtk_text_iter_is_start(&end)) return TRUE;
+    gtk_text_iter_backward_char(&end);
+    return gtk_text_iter_get_char(&end) == '\n';
+}
+
+/* With several runs, output of a run that did not write last starts
+ * under a line naming it. */
+static void run_insert(struct run *run, const char *text, gssize len)
+{
+    LsiwTask *r = run->runner;
+    if (r->multi && r->writer != run && (r->writer || r->runs->len > 1)) {
+        char *h = g_strdup_printf("%s[%s]\n", at_line_start(r) ? "" : "\n", run->what);
+        runner_insert(r, h, -1);
+        g_free(h);
+    }
+    r->writer = run;
+    runner_insert(r, text, len);
+}
+
 void lsiw_task_append(LsiwTask *r, const char *text)
 {
+    r->writer = NULL;
     runner_insert(r, text, -1);
 }
 
@@ -523,17 +556,38 @@ static void run_output(struct run *run, const guint8 *data, gsize len, gboolean 
     while (left) {
         const char *end;
         g_utf8_validate_len(p, left, &end);
-        if (end > p) runner_insert(run->runner, p, end - p);
+        if (end > p) run_insert(run, p, end - p);
         left -= (gsize)(end - p);
         p = end;
         if (!left) break;
         gunichar c = g_utf8_get_char_validated(p, (gssize)left);
         if (c == (gunichar)-2 && !final) break;          /* wait for the rest */
-        runner_insert(run->runner, "\xef\xbf\xbd", 3);
+        run_insert(run, "\xef\xbf\xbd", 3);
         p++;
         left--;
     }
     g_byte_array_remove_range(run->pending, 0, run->pending->len - (guint)left);
+}
+
+/* "Running VotV…", "Running 2 programs: VotV, Arknights…" */
+static void status_running(LsiwTask *r, const char *before)
+{
+    GString *s = g_string_new(before);
+    if (before && *before) g_string_append_c(s, ' ');
+    if (r->runs->len == 1) {
+        struct run *run = g_ptr_array_index(r->runs, 0);
+        g_string_append_printf(s, "%s %s…", before && *before ? "Still running" : "Running", run->what);
+    } else {
+        g_string_append_printf(s, "%s %u programs: ", before && *before ? "Still running" : "Running",
+                               r->runs->len);
+        for (guint i = 0; i < r->runs->len; i++) {
+            struct run *run = g_ptr_array_index(r->runs, i);
+            g_string_append_printf(s, "%s%s", i ? ", " : "", run->what);
+        }
+        g_string_append(s, "…");
+    }
+    gtk_label_set_text(r->status, s->str);
+    g_string_free(s, TRUE);
 }
 
 static void run_finish(struct run *run)
@@ -560,16 +614,23 @@ static void run_finish(struct run *run)
     } else {
         msg = g_strdup_printf("%s ended.", run->what);
     }
-    char *line = g_strdup_printf("\n[%s]\n", msg);
+    char *line = g_strdup_printf("%s[%s]\n", at_line_start(r) ? "\n" : "\n\n", msg);
     runner_insert(r, line, -1);
     g_free(line);
-    gtk_label_set_text(r->status, msg);
+    r->writer = NULL;
+    r->last_tag = run->tag;
+    g_free(r->last_label);
+    r->last_label = g_strdup(run->what);
+
+    /* The runner's reference is now this function's. */
+    gboolean held = g_ptr_array_remove(r->runs, run);
+    if (r->runs->len) status_running(r, msg);
+    else gtk_label_set_text(r->status, msg);
     g_free(msg);
 
-    r->run = NULL;
     if (r->finished) r->finished(r, r->data);
     if (r->state_changed) r->state_changed(r, r->data);
-    run_unref(run);                        /* the runner's reference */
+    if (held) run_unref(run);
 }
 
 static void read_next(struct run *run);
@@ -583,7 +644,7 @@ static void read_cb(GObject *src, GAsyncResult *res, gpointer data)
         if (!bytes || g_bytes_get_size(bytes) == 0) {
             if (err && !g_error_matches(err, G_IO_ERROR, G_IO_ERROR_CANCELLED)) {
                 char *m = g_strdup_printf("\n[reading the output failed: %s]\n", err->message);
-                runner_insert(run->runner, m, -1);
+                run_insert(run, m, -1);
                 g_free(m);
             }
             run->eof = TRUE;
@@ -643,6 +704,7 @@ LsiwTask *lsiw_task_new(GtkTextView *view, GtkLabel *status)
     gtk_text_buffer_get_end_iter(r->buffer, &end);
     r->end_mark = gtk_text_buffer_create_mark(r->buffer, "lsiw-end", &end, FALSE);
     r->status = status;
+    r->runs = g_ptr_array_new();
     return r;
 }
 
@@ -654,6 +716,11 @@ void lsiw_task_set_callbacks(LsiwTask *r, LsiwTaskFunc state_changed,
     r->data = data;
 }
 
+void lsiw_task_set_multi(LsiwTask *r, gboolean multi)
+{
+    r->multi = multi;
+}
+
 /* Runs in the child between fork and exec: a process group of its own,
  * so Stop reaches everything it started (Wine starts several processes). */
 static void child_setup(gpointer data)
@@ -662,9 +729,10 @@ static void child_setup(gpointer data)
     setpgid(0, 0);
 }
 
-gboolean lsiw_task_start(LsiwTask *r, const char *const *argv, const char *cwd)
+guint lsiw_task_start_full(LsiwTask *r, const char *const *argv, const char *cwd,
+                           const char *label, int tag)
 {
-    if (r->run) return FALSE;
+    if (r->runs->len && !r->multi) return 0;
 
     GString *cmd = g_string_new("$");
     for (int i = 0; argv[i]; i++) {
@@ -676,7 +744,7 @@ gboolean lsiw_task_start(LsiwTask *r, const char *const *argv, const char *cwd)
     g_string_append_c(cmd, '\n');
     GtkTextIter end;
     gtk_text_buffer_get_end_iter(r->buffer, &end);
-    if (!gtk_text_iter_is_start(&end)) runner_insert(r, "\n", 1);
+    if (!gtk_text_iter_is_start(&end)) runner_insert(r, at_line_start(r) ? "\n" : "\n\n", -1);
     runner_insert(r, cmd->str, (gssize)cmd->len);
     g_string_free(cmd, TRUE);
 
@@ -692,6 +760,7 @@ gboolean lsiw_task_start(LsiwTask *r, const char *const *argv, const char *cwd)
 
     char *base = g_path_get_basename(argv[0]);
     if (!proc) {
+        r->writer = NULL;
         char *m = g_strdup_printf("[%s could not be started: %s]\n", base, err->message);
         runner_insert(r, m, -1);
         g_free(m);
@@ -701,36 +770,66 @@ gboolean lsiw_task_start(LsiwTask *r, const char *const *argv, const char *cwd)
         g_free(base);
         g_error_free(err);
         r->have_code = FALSE;
-        return FALSE;
+        return 0;
     }
 
     struct run *run = g_rc_box_new0(struct run);
     run->runner = g_rc_box_acquire(r);
+    run->id = ++r->next_id;
+    run->tag = tag;
     run->proc = proc;
     run->out = g_object_ref(g_subprocess_get_stdout_pipe(proc));
     run->cancel = g_cancellable_new();
     run->pending = g_byte_array_new();
     /* "lsiw run", "pkexec", ... for the status line */
-    if (!strcmp(base, "lsiw") && argv[1])
+    if (label && *label)
+        run->what = g_strdup(label);
+    else if (!strcmp(base, "lsiw") && argv[1])
         run->what = g_strdup_printf("lsiw %s", argv[1]);
     else
         run->what = g_strdup(base);
     g_free(base);
-    r->run = run;               /* the runner's reference */
+    g_ptr_array_add(r->runs, run);   /* the runner's reference */
+    r->writer = run;                 /* its output follows its command line */
 
-    char *m = g_strdup_printf("Running %s…", run->what);
-    gtk_label_set_text(r->status, m);
-    g_free(m);
+    status_running(r, NULL);
 
     read_next(run);
     g_subprocess_wait_async(proc, run->cancel, wait_cb, run_ref(run));
     if (r->state_changed) r->state_changed(r, r->data);
-    return TRUE;
+    return run->id;
+}
+
+gboolean lsiw_task_start(LsiwTask *r, const char *const *argv, const char *cwd)
+{
+    return lsiw_task_start_full(r, argv, cwd, NULL, 0) != 0;
 }
 
 gboolean lsiw_task_running(LsiwTask *r)
 {
-    return r->run != NULL;
+    return r->runs->len != 0;
+}
+
+guint lsiw_task_count(LsiwTask *r)
+{
+    return r->runs->len;
+}
+
+guint lsiw_task_run_id(LsiwTask *r, guint i)
+{
+    return i < r->runs->len ? ((struct run *)g_ptr_array_index(r->runs, i))->id : 0;
+}
+
+const char *lsiw_task_run_label(LsiwTask *r, guint i)
+{
+    return i < r->runs->len ? ((struct run *)g_ptr_array_index(r->runs, i))->what : NULL;
+}
+
+int lsiw_task_run_pid(LsiwTask *r, guint i)
+{
+    if (i >= r->runs->len) return 0;
+    const char *id = g_subprocess_get_identifier(((struct run *)g_ptr_array_index(r->runs, i))->proc);
+    return id ? atoi(id) : 0;
 }
 
 gboolean lsiw_task_exit_code(LsiwTask *r, int *code)
@@ -739,23 +838,54 @@ gboolean lsiw_task_exit_code(LsiwTask *r, int *code)
     return r->have_code;
 }
 
-void lsiw_task_stop(LsiwTask *r)
+int lsiw_task_last_tag(LsiwTask *r)
 {
-    struct run *run = r->run;
-    if (!run || run->exited) return;
+    return r->last_tag;
+}
+
+const char *lsiw_task_last_label(LsiwTask *r)
+{
+    return r->last_label;
+}
+
+static void run_stop(struct run *run)
+{
+    LsiwTask *r = run->runner;
+    if (run->exited) return;
     const char *id = g_subprocess_get_identifier(run->proc);
     pid_t pid = id ? (pid_t)atoi(id) : 0;
-    int sig = run->stops++ ? SIGKILL : SIGTERM;
+    /* lsiw stops the program it watches on SIGTERM and forces it on a
+     * second one, so with several programs SIGKILL comes only third. */
+    int sig = run->stops++ >= (r->multi ? 2 : 1) ? SIGKILL : SIGTERM;
     /* The group first; a child that is set-user-ID (pkexec) refuses it. */
     if (pid <= 0 || kill(-pid, sig) < 0) {
         if (sig == SIGKILL) g_subprocess_force_exit(run->proc);
         else g_subprocess_send_signal(run->proc, sig);
     }
-    gtk_label_set_text(r->status, sig == SIGKILL ? "Forcing it to stop…" : "Stopping…");
+    char *m = r->multi ? g_strdup_printf(run->stops > 1 ? "Forcing %s to stop…" : "Stopping %s…", run->what)
+                       : g_strdup(sig == SIGKILL ? "Forcing it to stop…" : "Stopping…");
+    gtk_label_set_text(r->status, m);
+    g_free(m);
+}
+
+void lsiw_task_stop_run(LsiwTask *r, guint id)
+{
+    for (guint i = 0; i < r->runs->len; i++) {
+        struct run *run = g_ptr_array_index(r->runs, i);
+        if (run->id == id) { run_stop(run); return; }
+    }
+}
+
+void lsiw_task_stop(LsiwTask *r)
+{
+    for (guint i = 0; i < r->runs->len; i++) run_stop(g_ptr_array_index(r->runs, i));
+    if (r->multi && r->runs->len > 1)
+        gtk_label_set_text(r->status, "Stopping every program…");
 }
 
 void lsiw_task_clear(LsiwTask *r)
 {
+    r->writer = NULL;
     gtk_text_buffer_set_text(r->buffer, "", 0);
 }
 
@@ -763,9 +893,8 @@ void lsiw_task_free(LsiwTask *r)
 {
     if (!r) return;
     r->alive = FALSE;
-    if (r->run) {
-        struct run *run = r->run;
-        r->run = NULL;
+    while (r->runs->len) {
+        struct run *run = g_ptr_array_steal_index(r->runs, r->runs->len - 1);
         g_cancellable_cancel(run->cancel);
         run_unref(run);
     }

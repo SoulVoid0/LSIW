@@ -14,7 +14,7 @@
 extern "C" {
 #endif
 
-#define LSIW_VERSION "1.9.1"
+#define LSIW_VERSION "1.10.0"
 
 /* ------------------------------------------------------------------ */
 /* Variable table                                                       */
@@ -268,6 +268,13 @@ void  lsiw_playtime_tick(struct lsiw_session *s);
 void  lsiw_playtime_end(struct lsiw_session *s, const char *result);
 /* "45 s", "12 min", "3 h 05 min", "250 h"; "today 14:02", "yesterday
  * 09:15", "2026-10-30 21:40", "never". Caller frees. */
+/* The sessions running right now, of every program: the program's id,
+ * the pid of its watcher (a process group leader unless it was started
+ * in the foreground of a terminal) and its start. Free with
+ * lsiw_playtime_live_free. */
+struct lsiw_live_session { char *id; long pid; long long start; };
+size_t lsiw_playtime_live(struct lsiw_live_session **out);
+void  lsiw_playtime_live_free(struct lsiw_live_session *v, size_t n);
 char *lsiw_playtime_format(long long seconds);
 char *lsiw_playtime_when(long long t);
 

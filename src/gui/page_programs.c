@@ -25,6 +25,7 @@
 #include "common.h"
 #include <stdlib.h>
 #include <string.h>
+#include <signal.h>
 #include <unistd.h>
 
 /* Dropdown entries; the first one follows the Engine page. */
@@ -48,17 +49,28 @@ struct prog_page {
     GtkTextView *output;
     LsiwTask *runner;
     char *last_dir;
-    int mode;
+    /* Stop: a button while one program runs, a menu of them while several
+     * do (started here, or elsewhere: a .lwlnk, the applications menu). */
+    GtkWidget *stop_button, *stop_menu;
+    GMenu *stop_items;
+    char *stop_sig;               /* what the menu shows, to rebuild it on change */
+    struct lsiw_live_session *ext;  /* library programs started elsewhere */
+    size_t n_ext;
+    GHashTable *ext_stops;        /* pid -> how often Stop was asked */
+    GHashTable *ext_names;        /* pid -> the name of a program being stopped */
+    guint poll_id;
 };
+
+static void update_stop(struct prog_page *p);
 
 static void update_actions(struct prog_page *p)
 {
-    gboolean busy = lsiw_task_running(p->runner);
     const char *path = gtk_editable_get_text(GTK_EDITABLE(p->path_entry));
     gboolean have = *path != 0;
-    lsiw_gui_action_enable(p->actions, "run", have && !busy);
-    lsiw_gui_action_enable(p->actions, "check", have && !busy);
-    lsiw_gui_action_enable(p->actions, "stop", busy);
+    /* Programs run side by side: starting one never waits for another. */
+    lsiw_gui_action_enable(p->actions, "run", have);
+    lsiw_gui_action_enable(p->actions, "check", have);
+    update_stop(p);
 }
 
 static void path_changed_cb(GtkEditable *e, gpointer data)
@@ -218,8 +230,9 @@ static void act_run(GSimpleAction *a, GVariant *param, gpointer data)
     g_ptr_array_add(argv, NULL);
 
     char *cwd = program_dir(path);
-    p->mode = MODE_RUN;
-    lsiw_task_start(p->runner, (const char *const *)argv->pdata, cwd);
+    char *label = g_path_get_basename(path);
+    lsiw_task_start_full(p->runner, (const char *const *)argv->pdata, cwd, label, MODE_RUN);
+    g_free(label);
     g_free(cwd);
     g_ptr_array_unref(argv);
     g_free(opt);
@@ -234,15 +247,187 @@ static void act_check(GSimpleAction *a, GVariant *param, gpointer data)
     const char *cli = *path ? need_cli(p) : NULL;
     if (!cli) return;
     const char *argv[] = { cli, "check", path, NULL };
-    p->mode = MODE_CHECK;
-    lsiw_task_start(p->runner, argv, NULL);
+    char *base = g_path_get_basename(path);
+    char *label = g_strdup_printf("Check of %s", base);
+    lsiw_task_start_full(p->runner, argv, NULL, label, MODE_CHECK);
+    g_free(label);
+    g_free(base);
+}
+
+/* ---- stopping ---- */
+
+static char *program_name(const char *id)
+{
+    struct lsiw_program *pr = lsiw_program_get(id);
+    char *n = g_strdup(pr && pr->name && *pr->name ? pr->name : id);
+    lsiw_program_free(pr);
+    return n;
+}
+
+/* A library program started elsewhere: its watcher leads a process group
+ * with everything it started (src/cli/library.c), so the group is
+ * stopped, as Stop does for programs started here. SIGTERM first, SIGKILL
+ * when asked again. */
+static void stop_external(struct prog_page *p, long pid)
+{
+    gpointer key = GINT_TO_POINTER((int)pid);
+    int asked = GPOINTER_TO_INT(g_hash_table_lookup(p->ext_stops, key));
+    g_hash_table_insert(p->ext_stops, key, GINT_TO_POINTER(asked + 1));
+    int sig = asked ? SIGKILL : SIGTERM;
+    if (getpgid((pid_t)pid) != (pid_t)pid || kill(-(pid_t)pid, sig) < 0) kill((pid_t)pid, sig);
+    for (size_t i = 0; i < p->n_ext; i++) {
+        if (p->ext[i].pid != pid) continue;
+        char *n = program_name(p->ext[i].id);
+        char *m = g_strdup_printf(asked ? "Forcing %s to stop…" : "Stopping %s…", n);
+        gtk_label_set_text(GTK_LABEL(p->status), m);
+        g_free(m);
+        g_hash_table_insert(p->ext_names, key, n);
+    }
 }
 
 static void act_stop(GSimpleAction *a, GVariant *param, gpointer data)
 {
     (void)a; (void)param;
     struct prog_page *p = data;
+    if (lsiw_task_running(p->runner)) lsiw_task_stop(p->runner);
+    else if (p->n_ext == 1) stop_external(p, p->ext[0].pid);
+}
+
+/* "run:ID" (started here) or "pid:PID" (started elsewhere). */
+static void act_stop_one(GSimpleAction *a, GVariant *param, gpointer data)
+{
+    (void)a;
+    struct prog_page *p = data;
+    const char *t = g_variant_get_string(param, NULL);
+    if (g_str_has_prefix(t, "run:")) lsiw_task_stop_run(p->runner, (guint)g_ascii_strtoull(t + 4, NULL, 10));
+    else if (g_str_has_prefix(t, "pid:")) stop_external(p, (long)g_ascii_strtoll(t + 4, NULL, 10));
+}
+
+static void act_stop_all(GSimpleAction *a, GVariant *param, gpointer data)
+{
+    (void)a; (void)param;
+    struct prog_page *p = data;
     lsiw_task_stop(p->runner);
+    for (size_t i = 0; i < p->n_ext; i++) stop_external(p, p->ext[i].pid);
+}
+
+static gboolean pid_is_ours(struct prog_page *p, long pid)
+{
+    for (guint i = 0; i < lsiw_task_count(p->runner); i++)
+        if (lsiw_task_run_pid(p->runner, i) == pid) return TRUE;
+    return FALSE;
+}
+
+/* Re-read the library programs running right now. */
+static void refresh_external(struct prog_page *p)
+{
+    lsiw_playtime_live_free(p->ext, p->n_ext);
+    struct lsiw_live_session *v;
+    size_t n = lsiw_playtime_live(&v), k = 0;
+    for (size_t i = 0; i < n; i++) {
+        if (pid_is_ours(p, v[i].pid)) { free(v[i].id); continue; }
+        v[k++] = v[i];
+    }
+    p->ext = v;
+    p->n_ext = k;
+    /* A program started elsewhere that Stop ended. */
+    GHashTableIter it;
+    gpointer key, name;
+    g_hash_table_iter_init(&it, p->ext_names);
+    while (g_hash_table_iter_next(&it, &key, &name)) {
+        gboolean alive = FALSE;
+        for (size_t i = 0; i < k; i++) if (v[i].pid == GPOINTER_TO_INT(key)) alive = TRUE;
+        if (alive) continue;
+        char *m = g_strdup_printf("%s was stopped.", (char *)name);
+        gtk_label_set_text(GTK_LABEL(p->status), m);
+        g_free(m);
+        g_hash_table_remove(p->ext_stops, key);
+        g_hash_table_iter_remove(&it);
+    }
+}
+
+static void update_stop(struct prog_page *p)
+{
+    if (!p->stop_button) return;
+    guint ours = lsiw_task_count(p->runner);
+    size_t total = ours + p->n_ext;
+    lsiw_gui_action_enable(p->actions, "stop", total > 0);
+    gtk_widget_set_visible(p->stop_button, total <= 1);
+    gtk_widget_set_visible(p->stop_menu, total > 1);
+    if (total == 1 && p->n_ext == 1) {
+        char *n = program_name(p->ext[0].id);
+        char *tip = g_strdup_printf("Stop %s (started outside LSIW Control)", n);
+        gtk_widget_set_tooltip_text(p->stop_button, tip);
+        g_free(tip);
+        g_free(n);
+    } else {
+        gtk_widget_set_tooltip_text(p->stop_button, NULL);
+    }
+
+    /* The menu: one entry for each running program, then Stop all. */
+    GString *sig = g_string_new(NULL);
+    GPtrArray *labels = g_ptr_array_new_with_free_func(g_free);
+    GPtrArray *targets = g_ptr_array_new_with_free_func(g_free);
+    for (guint i = 0; i < ours; i++) {
+        g_ptr_array_add(labels, g_strdup_printf("Stop %s", lsiw_task_run_label(p->runner, i)));
+        g_ptr_array_add(targets, g_strdup_printf("run:%u", lsiw_task_run_id(p->runner, i)));
+    }
+    for (size_t i = 0; i < p->n_ext; i++) {
+        char *n = program_name(p->ext[i].id);
+        char *when = lsiw_playtime_when(p->ext[i].start);
+        g_ptr_array_add(labels, g_strdup_printf("Stop %s (started %s, outside LSIW Control)", n, when));
+        g_ptr_array_add(targets, g_strdup_printf("pid:%ld", p->ext[i].pid));
+        free(when);
+        g_free(n);
+    }
+    /* Two runs of the same program: tell them apart by their order. */
+    char **orig = g_new0(char *, labels->len + 1);
+    for (guint i = 0; i < labels->len; i++) orig[i] = g_strdup(labels->pdata[i]);
+    for (guint i = 0; i < labels->len; i++) {
+        int same = 0, nth = 0;
+        for (guint j = 0; j < labels->len; j++) {
+            if (strcmp(orig[i], orig[j])) continue;
+            same++;
+            if (j <= i) nth = same;
+        }
+        if (same > 1) {
+            g_free(labels->pdata[i]);
+            labels->pdata[i] = g_strdup_printf("%s #%d", orig[i], nth);
+        }
+    }
+    g_strfreev(orig);
+    for (guint i = 0; i < labels->len; i++)
+        g_string_append_printf(sig, "%s\n%s\n", (char *)labels->pdata[i], (char *)targets->pdata[i]);
+    if (g_strcmp0(sig->str, p->stop_sig)) {
+        g_free(p->stop_sig);
+        p->stop_sig = g_strdup(sig->str);
+        g_menu_remove_all(p->stop_items);
+        GMenu *each = g_menu_new();
+        for (guint i = 0; i < labels->len; i++) {
+            GMenuItem *it = g_menu_item_new(labels->pdata[i], NULL);
+            g_menu_item_set_action_and_target_value(it, "prog.stop-one",
+                                                    g_variant_new_string(targets->pdata[i]));
+            g_menu_append_item(each, it);
+            g_object_unref(it);
+        }
+        g_menu_append_section(p->stop_items, NULL, G_MENU_MODEL(each));
+        g_object_unref(each);
+        GMenu *all = g_menu_new();
+        g_menu_append(all, "Stop _all", "prog.stop-all");
+        g_menu_append_section(p->stop_items, NULL, G_MENU_MODEL(all));
+        g_object_unref(all);
+    }
+    g_string_free(sig, TRUE);
+    g_ptr_array_unref(labels);
+    g_ptr_array_unref(targets);
+}
+
+static gboolean poll_cb(gpointer data)
+{
+    struct prog_page *p = data;
+    refresh_external(p);
+    update_stop(p);
+    return G_SOURCE_CONTINUE;
 }
 
 static void act_clear(GSimpleAction *a, GVariant *param, gpointer data)
@@ -274,12 +459,15 @@ static const GActionEntry prog_actions[] = {
     { .name = "run", .activate = act_run },
     { .name = "check", .activate = act_check },
     { .name = "stop", .activate = act_stop },
+    { .name = "stop-one", .activate = act_stop_one, .parameter_type = "s" },
+    { .name = "stop-all", .activate = act_stop_all },
     { .name = "clear", .activate = act_clear },
 };
 
 static void runner_state_cb(LsiwTask *r, gpointer data)
 {
     (void)r;
+    refresh_external(data);
     update_actions(data);
     update_lib_actions(data);
 }
@@ -289,25 +477,37 @@ static void runner_done_cb(LsiwTask *r, gpointer data)
 {
     struct prog_page *p = data;
     int code;
+    int mode = lsiw_task_last_tag(r);
     if (!lsiw_task_exit_code(r, &code)) return;
     char *m = NULL;
-    if (p->mode == MODE_CHECK) {
+    if (mode == MODE_CHECK) {
         m = g_strdup(code == 0 ? "The native engine can run this program entirely."
                    : code == 1 ? "The native engine cannot run all of it (see the report); "
                                  "with the automatic engine it runs with Wine."
                    : "This is not a Windows program, or it was not found.");
-    } else if (p->mode == MODE_RUN) {
-        if (code == 126) m = g_strdup("The program could not be run (exit code 126); the output says why.");
-        else if (code == 127) m = g_strdup("The program, or Wine when it was needed, was not found (exit code 127).");
-        else m = g_strdup_printf("The program exited with code %d%s.", code,
-                                 code == 0 ? " (success)" : "");
+    } else if (mode == MODE_RUN) {
+        const char *n = lsiw_task_last_label(r);
+        if (code == 126) m = g_strdup_printf("%s could not be run (exit code 126); the output says why.", n);
+        else if (code == 127) m = g_strdup_printf("%s, or Wine when it was needed, was not found (exit code 127).", n);
+        else if (code == 128 + SIGTERM || code == 128 + SIGKILL || code == 128 + SIGINT) m = g_strdup_printf("%s was stopped.", n);
+        else m = g_strdup_printf("%s exited with code %d%s.", n, code, code == 0 ? " (success)" : "");
     }
-    else if (p->mode == MODE_LWLNK)
+    else if (mode == MODE_LWLNK)
         m = g_strdup(code == 0 ? "The shortcut is on the desktop: double-click it to start the program "
                                  "with these settings (the path is in the output below)."
                                : "The shortcut could not be made; the output says why.");
-    else if (p->mode == MODE_SCAN && code == 0)
+    else if (mode == MODE_SCAN && code == 0)
         m = g_strdup("Every installed program found in the Start menu is in the library now.");
+    if (m && lsiw_task_running(r)) {
+        /* Others still run: say so too. */
+        GString *s = g_string_new(m);
+        g_string_append(s, " Still running: ");
+        for (guint i = 0; i < lsiw_task_count(r); i++)
+            g_string_append_printf(s, "%s%s", i ? ", " : "", lsiw_task_run_label(r, i));
+        g_string_append(s, ".");
+        g_free(m);
+        m = g_string_free(s, FALSE);
+    }
     if (m) gtk_label_set_text(GTK_LABEL(p->status), m);
     g_free(m);
     /* `lsiw programs ...` may have changed the library. */
@@ -322,7 +522,13 @@ static void runner_done_cb(LsiwTask *r, gpointer data)
 static void prog_free(gpointer data)
 {
     struct prog_page *p = data;
+    if (p->poll_id) g_source_remove(p->poll_id);
     lsiw_task_free(p->runner);
+    lsiw_playtime_live_free(p->ext, p->n_ext);
+    g_hash_table_unref(p->ext_stops);
+    g_hash_table_unref(p->ext_names);
+    g_clear_object(&p->stop_items);
+    g_free(p->stop_sig);
     g_free(p->last_dir);
     g_free(p);
 }
@@ -414,14 +620,13 @@ static const char *selected_id(struct prog_page *p)
 
 static void update_lib_actions(struct prog_page *p)
 {
-    gboolean busy = lsiw_task_running(p->runner);
     gboolean sel = selected_id(p) != NULL;
     lsiw_gui_action_enable(p->actions, "lib-edit", sel);
-    lsiw_gui_action_enable(p->actions, "lib-remove", sel && !busy);
-    lsiw_gui_action_enable(p->actions, "lib-run", sel && !busy);
-    lsiw_gui_action_enable(p->actions, "lib-shortcut", sel && !busy);
-    lsiw_gui_action_enable(p->actions, "lib-lwlnk", sel && !busy);
-    lsiw_gui_action_enable(p->actions, "lib-scan", !busy);
+    lsiw_gui_action_enable(p->actions, "lib-remove", sel);
+    lsiw_gui_action_enable(p->actions, "lib-run", sel);
+    lsiw_gui_action_enable(p->actions, "lib-shortcut", sel);
+    lsiw_gui_action_enable(p->actions, "lib-lwlnk", sel);
+    lsiw_gui_action_enable(p->actions, "lib-scan", TRUE);
 }
 
 static void lwlnk_for(struct prog_page *p, const char *id);
@@ -440,8 +645,7 @@ static void lib_activated_cb(const char *id, gpointer data)
 /* The desktop-shortcut button of a row of the List layout. */
 static void lib_shortcut_cb(const char *id, gpointer data)
 {
-    struct prog_page *p = data;
-    if (!lsiw_task_running(p->runner)) lwlnk_for(p, id);
+    lwlnk_for(data, id);
 }
 
 static void fill_library(struct prog_page *p, const char *select)
@@ -648,8 +852,7 @@ static void editor_save(GtkButton *b, gpointer data)
         const char *cli = lsiw_gui_cli();
         if (cli && want_shortcut != have_shortcut) {
             const char *argv[] = { cli, "programs", "shortcut", pr->id, want_shortcut ? "--desktop" : "--remove", NULL };
-            p->mode = MODE_NONE;
-            lsiw_task_start(p->runner, argv, NULL);
+            lsiw_task_start_full(p->runner, argv, NULL, NULL, MODE_NONE);
         }
     }
     fill_library(p, pr->id);
@@ -875,13 +1078,13 @@ static void act_lib_edit(GSimpleAction *a, GVariant *param, gpointer data)
     if (id) open_editor(p, id);
 }
 
-static void lib_cli(struct prog_page *p, const char *sub, const char *id, const char *opt, int mode)
+static void lib_cli(struct prog_page *p, const char *sub, const char *id, const char *opt, int mode,
+                    const char *label)
 {
     const char *cli = need_cli(p);
     if (!cli) return;
     const char *argv[] = { cli, "programs", sub, id, opt, NULL };
-    p->mode = mode;
-    lsiw_task_start(p->runner, argv, NULL);
+    lsiw_task_start_full(p->runner, argv, NULL, label, mode);
 }
 
 static void act_lib_run(GSimpleAction *a, GVariant *param, gpointer data)
@@ -889,7 +1092,11 @@ static void act_lib_run(GSimpleAction *a, GVariant *param, gpointer data)
     (void)a; (void)param;
     struct prog_page *p = data;
     const char *id = selected_id(p);
-    if (id) lib_cli(p, "run", id, NULL, MODE_RUN);
+    if (!id) return;
+    char *keep = g_strdup(id), *name = program_name(id);
+    lib_cli(p, "run", keep, NULL, MODE_RUN, name);
+    g_free(name);
+    g_free(keep);
 }
 
 static void act_lib_shortcut(GSimpleAction *a, GVariant *param, gpointer data)
@@ -897,7 +1104,7 @@ static void act_lib_shortcut(GSimpleAction *a, GVariant *param, gpointer data)
     (void)a; (void)param;
     struct prog_page *p = data;
     const char *id = selected_id(p);
-    if (id) lib_cli(p, "shortcut", id, NULL, MODE_NONE);
+    if (id) lib_cli(p, "shortcut", id, NULL, MODE_NONE, NULL);
 }
 
 /* An LSIW shortcut (.lwlnk) on the desktop, with the program's icon. */
@@ -907,8 +1114,7 @@ static void lwlnk_for(struct prog_page *p, const char *id)
     if (!cli) return;
     char *keep = g_strdup(id);       /* the row (and its id) is rebuilt when the task ends */
     const char *argv[] = { cli, "lwlnk", "create", keep, NULL };
-    p->mode = MODE_LWLNK;
-    lsiw_task_start(p->runner, argv, NULL);
+    lsiw_task_start_full(p->runner, argv, NULL, NULL, MODE_LWLNK);
     g_free(keep);
 }
 
@@ -923,7 +1129,7 @@ static void act_lib_lwlnk(GSimpleAction *a, GVariant *param, gpointer data)
 static void act_lib_scan(GSimpleAction *a, GVariant *param, gpointer data)
 {
     (void)a; (void)param;
-    lib_cli(data, "scan", "--add", NULL, MODE_SCAN);
+    lib_cli(data, "scan", "--add", NULL, MODE_SCAN, NULL);
 }
 
 static void act_lib_remove(GSimpleAction *a, GVariant *param, gpointer data)
@@ -933,7 +1139,9 @@ static void act_lib_remove(GSimpleAction *a, GVariant *param, gpointer data)
     const char *id = selected_id(p);
     if (!id) return;
     /* `lsiw programs remove` also removes its shortcuts. */
-    lib_cli(p, "remove", id, NULL, MODE_NONE);
+    char *keep = g_strdup(id);
+    lib_cli(p, "remove", keep, NULL, MODE_NONE, NULL);
+    g_free(keep);
 }
 
 static void entry_activate_cb(GtkEntry *e, gpointer data)
@@ -1028,7 +1236,16 @@ GtkWidget *lsiw_page_programs_new(void)
     gtk_widget_add_css_class(run, "suggested-action");
     lsiw_gui_wrap_row_append(row, run);
     lsiw_gui_wrap_row_append(row, lsiw_gui_action_button("Check _compatibility", "prog.check"));
-    lsiw_gui_wrap_row_append(row, lsiw_gui_action_button("_Stop", "prog.stop"));
+    p->stop_button = lsiw_gui_action_button("_Stop", "prog.stop");
+    lsiw_gui_wrap_row_append(row, p->stop_button);
+    p->stop_items = g_menu_new();
+    p->stop_menu = gtk_menu_button_new();
+    gtk_menu_button_set_label(GTK_MENU_BUTTON(p->stop_menu), "_Stop");
+    gtk_menu_button_set_use_underline(GTK_MENU_BUTTON(p->stop_menu), TRUE);
+    gtk_menu_button_set_menu_model(GTK_MENU_BUTTON(p->stop_menu), G_MENU_MODEL(p->stop_items));
+    gtk_widget_set_tooltip_text(p->stop_menu, "Several programs are running: choose the one to stop");
+    gtk_widget_set_visible(p->stop_menu, FALSE);
+    lsiw_gui_wrap_row_append(row, p->stop_menu);
     p->status = gtk_label_new(NULL);
     gtk_label_set_xalign(GTK_LABEL(p->status), 0);
     gtk_label_set_wrap(GTK_LABEL(p->status), TRUE);
@@ -1041,7 +1258,12 @@ GtkWidget *lsiw_page_programs_new(void)
 
     gtk_box_append(GTK_BOX(page), lsiw_gui_output_view(&p->output));
     p->runner = lsiw_task_new(p->output, GTK_LABEL(p->status));
+    lsiw_task_set_multi(p->runner, TRUE);
     lsiw_task_set_callbacks(p->runner, runner_state_cb, runner_done_cb, p);
+    p->ext_stops = g_hash_table_new(NULL, NULL);
+    p->ext_names = g_hash_table_new_full(NULL, NULL, NULL, g_free);
+    refresh_external(p);
+    p->poll_id = g_timeout_add_seconds(3, poll_cb, p);
 
     GtkDropTarget *drop = gtk_drop_target_new(G_TYPE_FILE, GDK_ACTION_COPY);
     g_signal_connect(drop, "drop", G_CALLBACK(drop_cb), p);

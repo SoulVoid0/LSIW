@@ -6,6 +6,50 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.10.0] - 2026-11-04
+
+### Added
+
+- **Several programs at once.** LSIW Control's *Launch* and *Run* stay
+  available while programs run, so any number of programs and games run
+  side by side (the same one more than once too). Their output goes to the
+  same view, each part under the name of the program it comes from.
+- **Stop a program of your choice.** While one program runs, *Stop* is a
+  button as before; while several run, it is a menu with one entry per
+  running program and *Stop all*. The menu also lists library programs
+  started outside LSIW Control (from an LSIW shortcut (.lwlnk), the
+  applications menu or `lsiw programs run`), which can be stopped from
+  there too; with only such a program running, the plain *Stop* stops it.
+- tests/instances.sh (in `make check-cli`): two programs in one prefix,
+  with stand-in Protons and a stand-in wineserver.
+
+### Fixed
+
+- **A second program hung at "Running ..." until the first one ended**,
+  for example a game started from its .lwlnk and an app launched in LSIW
+  Control: its output stopped after the ProtonFixes lines. LSIW started
+  Proton with `waitforexitandrun`, which waits for the prefix's wineserver
+  to exit, that is for every program already running in the shared
+  prefix. A program started while the prefix is in use now joins it
+  (Proton `run`).
+- **Two Wine versions in one prefix.** A wineserver serves only clients of
+  its own Wine version, and Proton rewrote the prefix ("Upgrading prefix
+  from dwproton-11.0-16 to 11.0-100") under the running program. A program
+  started while another runs in its prefix now uses the Proton or Wine that
+  runs the prefix (LSIW says so in the output); the next start after all
+  have ended uses the configured one again.
+- **A program counted as running until every program of the prefix had
+  ended.** Proton's launcher (umu.exe, steam.exe) waits for all programs of
+  the prefix, so play time kept counting and *Stop* stayed on for a program
+  that had already closed. `lsiw` now stays behind as a small watcher of
+  each program it starts with Wine or Proton (its processes carry
+  `LSIW_INSTANCE`): the instance ends when its own programs have ended.
+- **Stop did not reach the program itself under Wine and Proton**: Wine
+  starts each Windows program in a session of its own, outside the process
+  group *Stop* signalled. Stopping a program now ends every process of that
+  program, and never the wineserver or Wine's services that the other
+  programs of the prefix share.
+
 ## [1.9.1] - 2026-11-04
 
 ### Fixed

@@ -481,6 +481,12 @@ static char **split_args(const char *s, int *count)
  * to lsiw are passed on to it. */
 static int run_tracked(struct lsiw_program *p, int argc, char **argv)
 {
+    /* A process group of its own (unless it runs in the foreground of a
+     * terminal, where Ctrl+C must keep reaching it), so LSIW Control can
+     * stop this program and everything it started, however it was started
+     * (a .lwlnk, the applications menu, Launch). */
+    pid_t fg = isatty(STDIN_FILENO) ? tcgetpgrp(STDIN_FILENO) : -1;
+    if (fg < 0 || fg != getpgrp()) setpgid(0, 0);
     struct lsiw_session *s = lsiw_playtime_begin(p->id);
     if (!s) return lsiw_cli_run(argc, argv, p->engine);
     sigset_t set, old;
