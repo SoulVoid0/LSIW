@@ -14,7 +14,7 @@
 extern "C" {
 #endif
 
-#define LSIW_VERSION "1.9.0"
+#define LSIW_VERSION "1.9.1"
 
 /* ------------------------------------------------------------------ */
 /* Variable table                                                       */
@@ -408,6 +408,10 @@ const char *lsiw_runners_dir(void);
  * lsiw_strv_free; the folder is freed by the caller. */
 char **lsiw_steam_roots(void);
 char **lsiw_steam_libraries(void);
+/* The Steam installation that holds the client itself (steam.sh,
+ * steamclient.so): what Proton wants in STEAM_COMPAT_CLIENT_INSTALL_PATH.
+ * NULL when Steam is not installed. Freed by the caller. */
+char  *lsiw_steam_client_dir(void);
 char  *lsiw_steam_app_dir(const char *appid);
 /* 1 for the Flatpak and Snap builds of Steam, whose sandbox cannot start
  * programs installed on the host. */

@@ -73,6 +73,7 @@ int lsiw_proton_available(void);
  * chosen in LSIW Control (and show the Linux folders on C:). *mounts, if
  * not NULL, receives the linked folders as a ':' list (caller frees). */
 int lsiw_proton_prepare(const char *compat, int verbose, char **mounts);
+int lsiw_proton_repair_prefix(const char *compat, int verbose);
 /* Remove those links again. */
 int lsiw_proton_unlink(const char *compat, int verbose);
 /* Run a program with Proton in LSIW's Proton prefix; like lsiw_wine_run. */

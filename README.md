@@ -120,9 +120,9 @@ Every release also has installers that do everything for you:
 | `lsiw-VERSION-offline-installer-rpm.run` / `-deb.run` / `-appimage.run` | one format | Fedora & co. / Debian & co. / any distribution, no network needed |
 
 ```sh
-sh lsiw-1.9.0-offline-installer-deb.run           # install (same options as install.sh)
-sh lsiw-1.9.0-offline-installer-deb.run --verify  # only check the file
-sh lsiw-1.9.0-offline-installer.run --extract dir # only unpack the packages
+sh lsiw-1.9.1-offline-installer-deb.run           # install (same options as install.sh)
+sh lsiw-1.9.1-offline-installer-deb.run --verify  # only check the file
+sh lsiw-1.9.1-offline-installer.run --extract dir # only unpack the packages
 ```
 
 Offline installers check their payload and every package against the
@@ -169,19 +169,19 @@ GitHub release, so they are not a signature.
 ### Fedora, RHEL, openSUSE (.rpm)
 
 ```sh
-sudo dnf install ./lsiw-1.9.0-1.x86_64.rpm ./lsiw-control-1.9.0-1.x86_64.rpm
+sudo dnf install ./lsiw-1.9.1-1.x86_64.rpm ./lsiw-control-1.9.1-1.x86_64.rpm
 sudo dnf install wine        # optional: the fallback engine
 # openSUSE: sudo zypper install --allow-unsigned-rpm ./lsiw-*.rpm
 ```
 
 The prebuilt RPMs need glibc 2.38 (Fedora 39 or newer). On older systems
-rebuild them: `rpmbuild --rebuild lsiw-1.9.0-1.src.rpm` (or let
+rebuild them: `rpmbuild --rebuild lsiw-1.9.1-1.src.rpm` (or let
 `install.sh` do it).
 
 ### Debian, Ubuntu, Mint (.deb)
 
 ```sh
-sudo apt install ./lsiw_1.9.0-1_amd64.deb ./lsiw-control_1.9.0-1_amd64.deb
+sudo apt install ./lsiw_1.9.1-1_amd64.deb ./lsiw-control_1.9.1-1_amd64.deb
 ```
 
 `lsiw` runs on Debian 11, Ubuntu 20.04 and newer. LSIW Control needs GTK
@@ -192,10 +192,10 @@ install `lsiw_*.deb` alone and use the command line. Remove with
 ### Any distribution (.AppImage)
 
 ```sh
-chmod +x LSIW-1.9.0-x86_64.AppImage
-./LSIW-1.9.0-x86_64.AppImage                      # opens LSIW Control
-./LSIW-1.9.0-x86_64.AppImage run setup.exe        # any lsiw command
-ln -s "$PWD/LSIW-1.9.0-x86_64.AppImage" ~/.local/bin/lsiw   # a normal `lsiw` command
+chmod +x LSIW-1.9.1-x86_64.AppImage
+./LSIW-1.9.1-x86_64.AppImage                      # opens LSIW Control
+./LSIW-1.9.1-x86_64.AppImage run setup.exe        # any lsiw command
+ln -s "$PWD/LSIW-1.9.1-x86_64.AppImage" ~/.local/bin/lsiw   # a normal `lsiw` command
 ```
 
 The AppImage holds `lsiw`, LSIW Control and the GTK 4 libraries, so it
