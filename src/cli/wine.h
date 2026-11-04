@@ -95,6 +95,28 @@ struct lsiw_runner *lsiw_server_runner(const char *server_exe);
  * prefix, the instance ends too. Exits with the program's exit status;
  * returns only when it could not start it. */
 int lsiw_exec_instance(const char *file, char **argv);
+
+/* ------------------------------------------------------------------ */
+/* Each program as itself on the desktop (desktop.c)                    */
+/* ------------------------------------------------------------------ */
+
+struct lsiw_program;
+#include <sys/types.h>
+/* Give the program about to start (library program `p`, or the file `exe`
+ * when p is NULL) its own app ID, window class, desktop entry and systemd
+ * scope, so taskbars and System Monitor show it on its own. Once per
+ * process tree (LSIW_DESKTOP_ID marks it); LSIW_NO_IDENTITY=1 skips it. */
+void lsiw_cli_identity(const struct lsiw_program *p, const char *exe);
+/* The app number (>= 2^31, like Steam's non-Steam shortcuts) and window
+ * class (steam_app_N) of program ID. Caller frees the class. */
+unsigned long lsiw_cli_app_number(const char *id);
+char *lsiw_cli_window_class(const char *id);
+/* The processes in this program's own scope (none when it has none).
+ * Caller frees *out. */
+int lsiw_cli_scope_procs(pid_t **out);
+/* Move processes out of this program's scope into a scope of their own
+ * (Wine's shared processes). 0 when done. */
+int lsiw_cli_scope_release(const pid_t *pids, int n);
 /* Add (add=1) or remove the "LSIW Proton" tools in every Steam found. */
 int lsiw_steam_integrate(int add, int verbose);
 int lsiw_cmd_steam(int argc, char **argv);

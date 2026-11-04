@@ -180,6 +180,7 @@ check-cli: lsiw
 	LSIW='$(CURDIR)/lsiw' bash tests/playtime.sh
 	LSIW='$(CURDIR)/lsiw' bash tests/proton.sh
 	LSIW='$(CURDIR)/lsiw' bash tests/instances.sh
+	LSIW='$(CURDIR)/lsiw' bash tests/identity.sh
 
 # How many functions each export table of the native engine provides
 # (table entries; see docs/COMPATIBILITY.md).

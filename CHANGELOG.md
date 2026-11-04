@@ -6,6 +6,33 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.10.1] - 2026-11-04
+
+### Fixed
+
+- **Programs were one entry in the taskbar and missing from System
+  Monitor.** Proton names every window `steam_app_<SteamAppId>`, and LSIW
+  ran every program as app 0, so the taskbar grouped all of them under one
+  icon; and they ran in the cgroup of LSIW Control, so System Monitor's
+  Applications list counted them as LSIW Control. Now each program gets:
+  - its own app ID under Proton (SteamAppId/SteamGameId, a number of 2^31
+    or more, the way Steam numbers non-Steam shortcuts, so it never matches
+    a real Steam game or its game-specific fixes), so its windows have
+    their own class, `steam_app_N`; a game Steam starts keeps Steam's ID;
+  - a desktop entry: its applications-menu shortcut (`lsiw-ID.desktop`,
+    which now has `StartupWMClass`; older ones get it on the next run), or
+    else a hidden one, `lsiw.ID.desktop` (`NoDisplay`), with its name and
+    icon; `BAMF_DESKTOP_FILE_HINT` points at it, which Plasma's task
+    manager reads for windows whose class says nothing (plain Wine);
+  - a systemd user scope of its own, `app-lsiw-<desktop ID>-<random>.scope`
+    in `app.slice`, the name System Monitor reads the application from.
+    Wine's shared processes (wineserver, services.exe, explorer.exe ...)
+    move to a `lsiw-wine-*.scope`, so a program's entry ends with the
+    program. Without systemd (or libsystemd), programs run as before.
+  `LSIW_NO_IDENTITY=1` turns this off.
+- tests/identity.sh (in `make check-cli`): app IDs, desktop entries and,
+  with a systemd user manager, the scopes.
+
 ## [1.10.0] - 2026-11-04
 
 ### Added

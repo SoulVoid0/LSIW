@@ -693,6 +693,23 @@ static int signal_instance(const char *tag, int sig, int helpers_only)
     return programs;
 }
 
+/* Wine's shared processes (the wineserver, services.exe ...) go to a
+ * scope of their own, so this program's scope ends with it. */
+static void tidy_scope(void)
+{
+    pid_t *v;
+    int n = lsiw_cli_scope_procs(&v);
+    pid_t move[16];
+    int m = 0;
+    for (int i = 0; i < n && m < 16; i++) {
+        char pid[24];
+        snprintf(pid, sizeof pid, "%ld", (long)v[i]);
+        if (proc_kind(pid) == PROC_SYSTEM) move[m++] = v[i];
+    }
+    free(v);
+    if (m) lsiw_cli_scope_release(move, m);
+}
+
 static double now_mono(void)
 {
     struct timespec ts;
@@ -756,6 +773,7 @@ int lsiw_exec_instance(const char *file, char **argv)
 
     int status = 0, child_done = 0, seen = 0, ended = 0;
     int stops = 0;
+    double last_tidy = 0;
     double last_stop = 0, gone_since = 0;
     for (;;) {
         struct timespec tick = { 0, 500 * 1000 * 1000 };
@@ -763,6 +781,10 @@ int lsiw_exec_instance(const char *file, char **argv)
         int sig = sigtimedwait(&set, &si, &tick);
         if (!child_done && waitpid(child, &status, WNOHANG) == child) child_done = 1;
         double t = now_mono();
+        if (!stops && t - last_tidy >= 2.0) {
+            last_tidy = t;
+            tidy_scope();
+        }
         if (sig == SIGTERM || sig == SIGINT || sig == SIGHUP || sig == SIGQUIT) {
             /* The same request often arrives twice (to the process group
              * and passed on by the play-time watcher): a second one counts
@@ -1018,6 +1040,16 @@ int lsiw_proton_run(const char *linux_path, int argc, char **argv, int verbose)
         lsiw_mkdirs(c, 0755);
         setenv("STEAM_COMPAT_CLIENT_INSTALL_PATH", c, 1);
         free(c);
+    }
+    /* Proton names each window steam_app_$SteamAppId: the program's own
+     * number (lsiw_cli_identity) keeps programs apart on the taskbar,
+     * unless Steam itself started the game. */
+    const char *own = getenv("LSIW_STEAM_APPID");
+    const char *sai = getenv("SteamAppId");
+    if (own && *own && (!sai || !*sai || !strcmp(sai, "0"))) {
+        setenv("SteamAppId", own, 1);
+        const char *sgi = getenv("SteamGameId");
+        if (!sgi || !*sgi || !strcmp(sgi, "0")) setenv("SteamGameId", own, 1);
     }
     setenv("SteamAppId", "0", 0);
     setenv("SteamGameId", "0", 0);
