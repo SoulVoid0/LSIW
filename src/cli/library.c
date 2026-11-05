@@ -177,6 +177,8 @@ int lsiw_cmd_drives(int argc, char **argv)
 
 const char lsiw_help_prefix[] =
     "Usage: lsiw prefix [status]\n"
+    "       lsiw prefix running [-v]\n"
+    "       lsiw prefix stop [--all] [PREFIX]\n"
     "\n"
     "Every Windows program and game uses one shared prefix by default, under\n"
     "Wine and under Proton, Steam games included: one registry, one set of\n"
@@ -186,6 +188,18 @@ const char lsiw_help_prefix[] =
     "\n"
     "  status  the shared prefix, the prefixes of programs, and prefixes of\n"
     "          earlier LSIW versions that are kept but no longer used\n"
+    "  running which Wine and Proton versions run now, for which prefix, with\n"
+    "          their processes and memory (-v: Wine's own processes too)\n"
+    "  stop    end Wine and Proton that run with no program (a wineserver and\n"
+    "          Wine's services left behind); --all also ends the programs;\n"
+    "          PREFIX (a pfx folder) limits it to one prefix\n"
+    "\n"
+    "Wine and Proton run only while a program needs them: a prefix's\n"
+    "wineserver and Wine's services (services.exe, explorer.exe ...) start\n"
+    "with its first program and end a few seconds after its last one. When\n"
+    "they are still there 10 seconds after a program LSIW started has ended,\n"
+    "with nothing left that uses them, LSIW ends them (LSIW_NO_REAP=1 turns\n"
+    "this off). System Monitor lists them as \"Wine services (LSIW)\".\n"
     "\n"
     "The folder is [prefix] shared in the configuration (default:\n"
     "~/.local/share/lsiw/shared; the Wine prefix is its pfx folder).\n";
@@ -211,6 +225,24 @@ int lsiw_cmd_prefix(int argc, char **argv)
 {
     const char *sub = argc > 1 ? argv[1] : "status";
     if (is_help(sub)) { fputs(lsiw_help_prefix, stdout); return 0; }
+    if (!strcmp(sub, "running") || !strcmp(sub, "ps")) {
+        int verbose = lsiw_verbose;
+        for (int i = 2; i < argc; i++) {
+            if (!strcmp(argv[i], "-v") || !strcmp(argv[i], "--verbose")) verbose = 1;
+            else { lsiw_log("unknown option '%s' (try 'lsiw prefix --help')\n", argv[i]); return 2; }
+        }
+        return lsiw_wine_running(verbose);
+    }
+    if (!strcmp(sub, "stop")) {
+        int all = 0;
+        const char *only = NULL;
+        for (int i = 2; i < argc; i++) {
+            if (!strcmp(argv[i], "--all")) all = 1;
+            else if (argv[i][0] == '-') { lsiw_log("unknown option '%s' (try 'lsiw prefix --help')\n", argv[i]); return 2; }
+            else only = argv[i];
+        }
+        return lsiw_wine_stop(all, only);
+    }
     if (strcmp(sub, "status")) {
         lsiw_log("unknown subcommand 'prefix %s' (try 'lsiw prefix --help')\n", sub);
         return 2;

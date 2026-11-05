@@ -18,7 +18,7 @@
 %global lsiw_make_vars GUI=yes CC="%{__cc}" CFLAGS="%{build_cflags}" LDFLAGS="%{build_ldflags}" PREFIX=%{_prefix} BINDIR=%{_bindir} LIBEXECDIR=%{_libexecdir} DATADIR=%{_datadir} SYSCONFDIR=%{_sysconfdir} BINFMTDIR=%{_binfmtdir} TMPFILESDIR=%{_tmpfilesdir} METAINFODIR=%{_metainfodir}
 
 Name:           lsiw
-Version:        1.10.1
+Version:        1.11.0
 Release:        1%{?dist}
 Summary:        Run Windows x86-64 programs on Linux with a native engine
 
@@ -147,6 +147,15 @@ update-desktop-database -q %{_datadir}/applications &>/dev/null || :
 %{_metainfodir}/io.github.lsiw.Control.metainfo.xml
 
 %changelog
+* Thu Nov 05 2026 The LSIW contributors - 1.11.0-1
+- Steam's default tool is LSIW Proton Experimental (Steam's own default is
+  Proton Experimental); LSIW Proton Stable set by an older LSIW is switched
+  over when Steam is closed, a default chosen by the user is kept
+- Wine and Proton left running with no program are ended after 10 seconds;
+  lsiw prefix running / stop; LSIW Control Engine page buttons
+- Wine's shared processes show in System Monitor as "Wine services (LSIW)"
+- Windows services no longer keep a program's run open
+
 * Wed Nov 04 2026 The LSIW contributors - 1.10.1-1
 - Each program shows on its own in taskbars and System Monitor: its own
   Proton app ID (window class steam_app_N), a desktop entry with

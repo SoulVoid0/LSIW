@@ -139,9 +139,11 @@ if command -v systemctl >/dev/null && systemctl --user is-system-running >/dev/n
     esac
     sv=$(val alpha server)
     case $sv in
-        */app.slice/lsiw-wine-*.scope) ok "Wine's shared processes move to a scope of their own" ;;
+        */app.slice/app-lsiw-lsiw_wine-*.scope) ok "Wine's shared processes move to a scope of their own" ;;
         *) fail "Wine's shared processes move to a scope of their own" "$sv" ;;
     esac
+    grep -q '^Name=Wine services (LSIW)$' "${XDG_DATA_HOME:-$HOME/.local/share}/applications/lsiw_wine.desktop" 2>/dev/null &&
+        ok "System Monitor names them Wine services (LSIW)" || fail "lsiw_wine.desktop written"
 else
     echo "ok - # skip: no systemd user manager"
 fi

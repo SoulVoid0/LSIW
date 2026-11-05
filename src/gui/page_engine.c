@@ -561,6 +561,20 @@ static void act_setup(GSimpleAction *a, GVariant *param, gpointer data)
     run_cli(data, args);
 }
 
+static void act_running(GSimpleAction *a, GVariant *param, gpointer data)
+{
+    (void)a; (void)param;
+    const char *args[] = { "prefix", "running", NULL };
+    run_cli(data, args);
+}
+
+static void act_stop_idle(GSimpleAction *a, GVariant *param, gpointer data)
+{
+    (void)a; (void)param;
+    const char *args[] = { "prefix", "stop", NULL };
+    run_cli(data, args);
+}
+
 static void act_stop(GSimpleAction *a, GVariant *param, gpointer data)
 {
     (void)a; (void)param;
@@ -575,6 +589,8 @@ static const GActionEntry engine_actions[] = {
     { .name = "get-ge", .activate = act_get_ge, .parameter_type = "s" },
     { .name = "detect", .activate = act_detect },
     { .name = "setup", .activate = act_setup },
+    { .name = "running", .activate = act_running },
+    { .name = "stop-idle", .activate = act_stop_idle },
     { .name = "stop", .activate = act_stop },
 };
 
@@ -583,6 +599,8 @@ static void runner_state_cb(LsiwTask *r, gpointer data)
     struct engine_page *p = data;
     gboolean busy = lsiw_task_running(r);
     lsiw_gui_action_enable(p->actions, "setup", !busy);
+    lsiw_gui_action_enable(p->actions, "running", !busy);
+    lsiw_gui_action_enable(p->actions, "stop-idle", !busy);
     lsiw_gui_action_enable(p->actions, "get-wine", !busy);
     lsiw_gui_action_enable(p->actions, "get-ge", !busy);
     lsiw_gui_action_enable(p->actions, "stop", busy);
@@ -766,6 +784,14 @@ GtkWidget *lsiw_page_engine_new(void)
                                        "the C: drive with no other drive letters, and point Windows' "
                                        "folders at LSIW's locations");
     lsiw_gui_wrap_row_append(row, setup);
+    GtkWidget *running = lsiw_gui_action_button("Show _running Wine", "engine.running");
+    gtk_widget_set_tooltip_text(running, "Run 'lsiw prefix running': which Wine and Proton versions run now, "
+                                         "for which prefix, and how much memory they take");
+    lsiw_gui_wrap_row_append(row, running);
+    GtkWidget *idle = lsiw_gui_action_button("Stop _idle Wine", "engine.stop-idle");
+    gtk_widget_set_tooltip_text(idle, "Run 'lsiw prefix stop': end Wine and Proton left running with no "
+                                      "program (LSIW also does this on its own after a program ends)");
+    lsiw_gui_wrap_row_append(row, idle);
     lsiw_gui_wrap_row_append(row, lsiw_gui_action_button("Stop", "engine.stop"));
     p->run_status = wrap_label();
     lsiw_gui_wrap_row_append(row, p->run_status);

@@ -53,6 +53,13 @@
   </supports>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="1.11.0" date="2026-11-05">
+      <description>
+        <p>Use for every game makes LSIW Proton Experimental the default in Steam, like Steam's own
+        default. Wine and Proton no longer stay in the background after the last program has ended,
+        and System Monitor shows Wine's shared processes as "Wine services (LSIW)".</p>
+      </description>
+    </release>
     <release version="1.10.1" date="2026-11-04">
       <description>
         <p>Each program and game shows on its own in the taskbar, with its own name and icon, and in

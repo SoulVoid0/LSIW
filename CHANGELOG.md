@@ -6,6 +6,51 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.11.0] - 2026-11-05
+
+### Changed
+
+- **Steam's default tool is now LSIW Proton Experimental.** *Use for every
+  game* (`lsiw steam default` with no tool named) made LSIW Proton Stable
+  the default; Steam's own default is Proton Experimental, so LSIW now uses
+  its twin. Where an older LSIW set LSIW Proton Stable and Steam still has
+  it, `lsiw steam add` (and every refresh of the tools) switches it to LSIW
+  Proton Experimental the next time Steam is closed, with config.vdf backed
+  up. A default picked in Steam's settings, or a tool named on purpose
+  (`lsiw steam default LSIW-proton-stable`, remembered as
+  `[steam] default_tool_chosen`), is left alone.
+
+### Added
+
+- **Wine and Proton left running are ended.** A prefix's wineserver and
+  Wine's services (services.exe, explorer.exe, winedevice.exe ...) normally
+  end a few seconds after its last program. When they are still there 10
+  seconds after a program LSIW started has ended, and nothing else uses the
+  prefix (a hung Wine service, for example), LSIW ends them: Wine's
+  processes first, then the wineserver, and Proton's sync memory in
+  /dev/shm if a wineserver had to be killed. `LSIW_NO_REAP=1` turns it off.
+- `lsiw prefix running` lists every Wine and Proton running, with its
+  prefix, its processes and their memory; `lsiw prefix stop` ends the ones
+  with no program (`--all`: programs too) and removes sync memory left by
+  killed wineservers. LSIW Control: *Show running Wine* and *Stop idle
+  Wine* on the Engine page.
+- System Monitor lists Wine's shared processes as **Wine services
+  (LSIW)**: their scope is now `app-lsiw-lsiw_wine-<random>.scope` with a
+  hidden desktop entry `lsiw_wine.desktop`. Before, they were in
+  `lsiw-wine-*.scope`, which System Monitor leaves out of Applications, so
+  their memory counted as used but showed nowhere.
+- tests/steamdefault.sh (in `make check-cli`); tests/instances.sh also
+  covers `prefix running`, `prefix stop` and ending a left-over wineserver.
+
+### Fixed
+
+- **Windows services kept a program "running".** Services that launchers
+  and anti-cheat install (started by services.exe with the prefix's first
+  program) counted as that program, so its run did not end, and its Stop
+  entry stayed, while anything else kept Wine up. Services listed in the
+  prefix's registry (ImagePath) now count as the prefix's, like Wine's own
+  processes, and move to the Wine services scope.
+
 ## [1.10.1] - 2026-11-04
 
 ### Fixed
