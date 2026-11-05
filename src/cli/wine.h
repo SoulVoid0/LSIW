@@ -82,6 +82,12 @@ int lsiw_proton_run(const char *linux_path, int argc, char **argv, int verbose);
  * uses it right now): the path of its executable, NULL when none runs.
  * Caller frees. */
 char *lsiw_prefix_server(const char *pfx);
+/* `lsiw prefix running`: every wineserver with its prefix, processes and
+ * memory. */
+int lsiw_wine_running(int verbose);
+/* `lsiw prefix stop`: end idle Wine/Proton (all: programs too), of every
+ * prefix or of only_pfx. Returns 0, or 1. */
+int lsiw_wine_stop(int all, const char *only_pfx);
 /* The installed runner a running wineserver belongs to (a Proton folder or
  * a Wine version), NULL when LSIW does not know it. Free with
  * lsiw_runner_free. */
@@ -119,6 +125,9 @@ int lsiw_cli_scope_procs(pid_t **out);
 int lsiw_cli_scope_release(const pid_t *pids, int n);
 /* Add (add=1) or remove the "LSIW Proton" tools in every Steam found. */
 int lsiw_steam_integrate(int add, int verbose);
+/* An older LSIW's default tool (LSIW Proton Stable, never chosen by the
+ * user) becomes LSIW Proton Experimental when Steam is closed. 1 if done. */
+int lsiw_steam_migrate_default(int verbose);
 int lsiw_cmd_steam(int argc, char **argv);
 int lsiw_cmd_steam_run(int argc, char **argv);
 int lsiw_cmd_runners(int argc, char **argv);

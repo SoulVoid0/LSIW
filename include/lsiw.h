@@ -14,7 +14,7 @@
 extern "C" {
 #endif
 
-#define LSIW_VERSION "1.10.1"
+#define LSIW_VERSION "1.11.0"
 
 /* ------------------------------------------------------------------ */
 /* Variable table                                                       */

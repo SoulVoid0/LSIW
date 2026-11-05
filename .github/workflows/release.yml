@@ -12,7 +12,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Tag to publish (for example v1.10.1); created on the chosen branch's commit if it does not exist
+        description: Tag to publish (for example v1.11.0); created on the chosen branch's commit if it does not exist
         required: true
 
 permissions:

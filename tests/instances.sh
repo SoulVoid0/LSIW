@@ -20,6 +20,9 @@ tmp=$(mktemp -d)
 export HOME=$tmp/home XDG_CONFIG_HOME=$tmp/home/.config XDG_DATA_HOME=$tmp/home/.local/share
 export XDG_DATA_DIRS=$tmp/nowhere LSIW_NO_UPDATE_CHECK=1
 unset STEAM_COMPAT_CLIENT_INSTALL_PATH STEAM_COMPAT_DATA_PATH SteamAppId SteamGameId UMU_ID LSIW_PREFIX LSIW_INSTANCE
+unset WINEPREFIX LSIW_REAP_GRACE
+# Ending a left-over wineserver is tested at the end, on its own.
+export LSIW_NO_REAP=1
 mkdir -p "$HOME"
 tag=lsiw-instances-$$
 # pgrep without procps (not in every container): pids whose argv[0]
@@ -71,7 +74,7 @@ make_proton() {   # DIR
 echo "$(basename "$(dirname "$0")") $1 $3" >> "@TMP@/verbs"
 if ! pany "wineserver @TAG@"; then
     mkdir -p "@SERVER@"
-    (cd "@SERVER@" && setsid bash -c 'exec -a "$0 @TAG@" "$0" 1000' "@DIR@/files/bin/wineserver" \
+    (cd "@SERVER@" && exec setsid bash -c 'exec -a "$0 @TAG@" "$0" 1000' "@DIR@/files/bin/wineserver" \
         </dev/null >/dev/null 2>&1 &)
 fi
 setsid bash -c 'exec -a "Z:\\prog\\$0.exe" sleep "$1"' "$3" "$4" </dev/null >/dev/null 2>&1 &
@@ -131,6 +134,43 @@ same "the wineserver keeps running" "$(pany "wineserver $tag" && echo yes || ech
 kill -TERM -- "-$(cat "$tmp/second.pid")"
 for _ in $(seq 1 60); do [ "$(running second)" = no ] && break; sleep 0.1; done
 same "second program stops too" "$(running second)" no
+
+# Wine left behind with no program: `lsiw prefix running` shows it idle,
+# `lsiw prefix stop` ends it, Wine's own processes first.
+server_up() { pany "wineserver $tag" && echo yes || echo no; }
+same "the wineserver is still there" "$(server_up)" yes
+WINEPREFIX=$shared/pfx setsid bash -c 'exec -a "C:\\windows\\system32\\services.exe" sleep 1000 1' \
+    </dev/null >/dev/null 2>&1 &
+svc=$!
+sleep 0.3
+out=$("$LSIW" prefix running -v)
+case $out in *"idle, only Wine's own processes"*services.exe*) ok "prefix running: idle, with services.exe" ;;
+             *) fail "prefix running: idle, with services.exe" "$out" ;; esac
+"$LSIW" prefix stop >/dev/null
+same "prefix stop ends the wineserver" "$(server_up)" no
+same "... and Wine's services" "$(kill -0 "$svc" 2>/dev/null && echo running || echo ended)" ended
+out=$("$LSIW" prefix running)
+same "nothing runs any more" "$out" "No Wine or Proton is running."
+
+# Left behind after a program: ended by lsiw on its own, once nothing uses
+# it, but not while a program still does.
+unset LSIW_NO_REAP
+export LSIW_REAP_GRACE=1
+start fourth 1 Fake-A
+wait_for fourth || fail "fourth program starts"
+for _ in $(seq 1 100); do kill -0 "$(cat "$tmp/fourth.pid")" 2>/dev/null || break; sleep 0.1; done
+for _ in $(seq 1 100); do [ "$(server_up)" = no ] && break; sleep 0.1; done
+same "an idle wineserver ends after the last program" "$(server_up)" no
+start fifth 1 Fake-A
+wait_for fifth || fail "fifth program starts"
+LSIW_NO_REAP=1 start sixth 12 Fake-A
+wait_for sixth || fail "sixth program starts"
+for _ in $(seq 1 100); do kill -0 "$(cat "$tmp/fifth.pid")" 2>/dev/null || break; sleep 0.1; done
+sleep 5
+same "a wineserver in use is left alone" "$(server_up)" yes
+same "... and its program runs on" "$(running sixth)" yes
+kill -TERM -- "-$(cat "$tmp/sixth.pid")"
+for _ in $(seq 1 60); do [ "$(running sixth)" = no ] && break; sleep 0.1; done
 
 if [ "$fails" -eq 0 ]; then echo "instances.sh: all tests passed"; else echo "instances.sh: $fails failed"; fi
 [ "$fails" -eq 0 ]

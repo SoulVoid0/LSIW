@@ -310,7 +310,7 @@ GtkWidget *lsiw_page_steam_new(void)
         "tool</i>. It runs the same Proton, but in <b>LSIW's shared prefix</b>, the one Wine and "
         "every other program use: C:\\ is your C: drive, and Documents, Saved Games, AppData, "
         "Desktop, Downloads, Music, Pictures and Videos are the folders chosen on the Locations "
-        "page. <b>Use for every game</b> makes LSIW Proton Steam's default (games you add later "
+        "page. <b>Use for every game</b> makes LSIW Proton Experimental Steam's default, as Proton Experimental is Steam's own (games you add later "
         "included) and moves the games already set to a Proton to its LSIW twin; quit Steam "
         "first, its settings file is backed up. A game that already had a prefix of its own keeps "
         "it untouched as a backup; its saves are copied into LSIW's folders the first time it "
@@ -353,7 +353,7 @@ GtkWidget *lsiw_page_steam_new(void)
     GtkWidget *ge = lsiw_gui_proton_download_button("steam.get-ge");
     lsiw_gui_wrap_row_append(row, ge);
     GtkWidget *def = lsiw_gui_action_button("_Use for every game", "steam.default");
-    gtk_widget_set_tooltip_text(def, "Run 'lsiw steam default --all' (quit Steam first): LSIW Proton Stable "
+    gtk_widget_set_tooltip_text(def, "Run 'lsiw steam default --all' (quit Steam first): LSIW Proton Experimental "
                                      "becomes the default for every game, new ones included, and games "
                                      "set to one of Valve's Protons or another Proton with an LSIW twin "
                                      "move to that twin. Steam's config.vdf is backed up.");

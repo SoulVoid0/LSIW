@@ -609,6 +609,70 @@ static int in_names(const char *const *list, const char *name)
     return 0;
 }
 
+/* Windows services installed in a prefix (launchers and anti-cheat
+ * install their own: "EABackgroundService", "Rockstar Service" ...).
+ * services.exe starts them with the prefix's first program, so they carry
+ * that program's LSIW_INSTANCE, and Wine ends them with Wine's own
+ * processes: they belong to the prefix, not to a program. Read from the
+ * ImagePath values in the prefix's system.reg, again when it changes. */
+static char **g_svc;
+static char *g_svc_reg;
+static struct timespec g_svc_mtime;
+
+static void services_load(const char *pfx)
+{
+    if (!pfx) return;
+    char *reg = lsiw_cli_printf("%s/system.reg", pfx);
+    struct stat st;
+    if (stat(reg, &st) < 0) { free(reg); return; }
+    if (g_svc_reg && !strcmp(g_svc_reg, reg) && st.st_mtim.tv_sec == g_svc_mtime.tv_sec &&
+        st.st_mtim.tv_nsec == g_svc_mtime.tv_nsec) { free(reg); return; }
+    lsiw_strv_free(g_svc);
+    g_svc = NULL;
+    free(g_svc_reg);
+    g_svc_reg = reg;
+    g_svc_mtime = st.st_mtim;
+    char *text = lsiw_cli_read_file(reg, NULL);
+    size_t n = 0;
+    for (char *l = text; l && *l; ) {
+        char *nl = strchr(l, '\n');
+        if (nl) *nl = 0;
+        if (!strncmp(l, "\"ImagePath\"=", 12)) {
+            /* "ImagePath"=str(2):"C:\\x\\svc.exe" or ="\"C:\\Program Files\\y.exe\" -k" */
+            char *v = strchr(l + 12, '"');
+            if (v) {
+                char *out = malloc(strlen(v) + 1), *o = out;
+                for (char *c = v + 1; *c && *c != '"'; c++) {
+                    if (*c == '\\' && c[1]) c++;
+                    if (*c == '"') continue;          /* an escaped quote around the path */
+                    *o++ = (char)tolower((unsigned char)*c);
+                }
+                *o = 0;
+                char *exe = strstr(out, ".exe");
+                if (exe) exe[4] = 0;
+                char *q = out;
+                while (*q == ' ') q++;
+                /* Wine's own services are Wine's processes anyway. */
+                if (exe && strncmp(q, "c:\\windows\\", 11)) {
+                    g_svc = realloc(g_svc, (n + 2) * sizeof *g_svc);
+                    g_svc[n++] = lsiw_cli_strdup(q);
+                    g_svc[n] = NULL;
+                }
+                free(out);
+            }
+        }
+        l = nl ? nl + 1 : NULL;
+    }
+    free(text);
+}
+
+static int is_service(const char *a0)
+{
+    for (char **s = g_svc; s && *s; s++)
+        if (!strcasecmp(*s, a0)) return 1;
+    return 0;
+}
+
 /* Which kind of process of an instance PID is (its argv[0]). */
 static int proc_kind(const char *pid)
 {
@@ -627,7 +691,7 @@ static int proc_kind(const char *pid)
         if (windows) {
             const char *b = strrchr(a0, '\\');
             b = b ? b + 1 : a0;
-            if (in_names(system_exes, b)) kind = PROC_SYSTEM;
+            if (in_names(system_exes, b) || is_service(a0)) kind = PROC_SYSTEM;
             else if (!in_names(helper_exes, b)) kind = PROC_PROGRAM;
         }
     }
@@ -717,6 +781,393 @@ static double now_mono(void)
     return (double)ts.tv_sec + ts.tv_nsec / 1e9;
 }
 
+/* ------------------------------------------------------------------ */
+/* Wine and Proton running in the background                            */
+/* ------------------------------------------------------------------ */
+
+/* A prefix has Wine running while its wineserver runs. Wine ends the
+ * wineserver and its own services (services.exe, explorer.exe ...) a few
+ * seconds after the last program of the prefix has exited. What is left
+ * after that (a Wine service that hangs, a wineserver whose programs were
+ * killed) only takes memory: lsiw_wine_reap() ends it once an instance is
+ * over, and `lsiw prefix running|stop` shows and ends it by hand. */
+
+struct wproc { pid_t pid; int kind; unsigned long long rss; char *name; };
+struct wserver {
+    pid_t pid;
+    dev_t dev; ino_t ino;
+    char *exe, *pfx;          /* pfx: as a process of it names it, or NULL */
+    unsigned long long rss;   /* the server and every process of it, bytes */
+    struct wproc *procs;
+    size_t n;
+    int programs;             /* processes that are not Wine's own */
+};
+
+static unsigned long long proc_rss(const char *pid)
+{
+    char path[64];
+    snprintf(path, sizeof path, "/proc/%s/statm", pid);
+    char *t = lsiw_read_text(path);
+    unsigned long long size = 0, res = 0;
+    if (t && sscanf(t, "%llu %llu", &size, &res) == 2) res *= (unsigned long long)sysconf(_SC_PAGESIZE);
+    else res = 0;
+    free(t);
+    return res;
+}
+
+/* The value of NAME in an environ block, or NULL. */
+static const char *env_value(const char *env, size_t len, const char *name)
+{
+    size_t nl = strlen(name);
+    for (size_t off = 0; off < len; off += strlen(env + off) + 1)
+        if (!strncmp(env + off, name, nl) && env[off + nl] == '=') return env + off + nl + 1;
+    return NULL;
+}
+
+/* The prefix a process uses: WINEPREFIX, else Proton's
+ * STEAM_COMPAT_DATA_PATH/pfx. 0 and *st filled when it has one. */
+static int proc_prefix(const char *pid, struct stat *st, char **path)
+{
+    size_t len;
+    char *env = read_proc_file(pid, "environ", &len);
+    if (!env) return -1;
+    const char *wp = env_value(env, len, "WINEPREFIX");
+    const char *cd = env_value(env, len, "STEAM_COMPAT_DATA_PATH");
+    char *p = wp && *wp ? lsiw_cli_strdup(wp) : cd && *cd ? lsiw_cli_printf("%s/pfx", cd) : NULL;
+    free(env);
+    int rc = p && stat(p, st) == 0 ? 0 : -1;
+    if (rc == 0 && path) *path = p;
+    else free(p);
+    return rc;
+}
+
+static void wservers_free(struct wserver *v, size_t n)
+{
+    for (size_t i = 0; i < n; i++) {
+        for (size_t k = 0; k < v[i].n; k++) free(v[i].procs[k].name);
+        free(v[i].procs);
+        free(v[i].exe);
+        free(v[i].pfx);
+    }
+    free(v);
+}
+
+/* Every wineserver of this user, with the processes of its prefix. */
+static size_t wine_servers(struct wserver **out)
+{
+    *out = NULL;
+    DIR *d = opendir("/proc");
+    if (!d) return 0;
+    uid_t me = getuid();
+    pid_t self = getpid();
+    struct wserver *v = NULL;
+    size_t n = 0;
+    struct { pid_t pid; dev_t dev; ino_t ino; char *pfx; } *users = NULL;
+    size_t nu = 0;
+    struct dirent *de;
+    while ((de = readdir(d))) {
+        if (!isdigit((unsigned char)de->d_name[0])) continue;
+        pid_t pid = (pid_t)atol(de->d_name);
+        if (pid == self) continue;
+        char path[320];
+        struct stat st;
+        snprintf(path, sizeof path, "/proc/%s", de->d_name);
+        if (stat(path, &st) < 0 || st.st_uid != me) continue;
+        snprintf(path, sizeof path, "/proc/%s/exe", de->d_name);
+        char *exe = lsiw_cli_readlink(path);
+        const char *eb = exe ? strrchr(exe, '/') : NULL;
+        if (eb && !strncmp(eb + 1, "wineserver", 10)) {
+            /* Its working folder is /tmp/.wine-UID/server-DEV-INODE. */
+            snprintf(path, sizeof path, "/proc/%s/cwd", de->d_name);
+            char *cwd = lsiw_cli_readlink(path);
+            const char *b = cwd ? strrchr(cwd, '/') : NULL;
+            unsigned long dv, in;
+            if (b && sscanf(b + 1, "server-%lx-%lx", &dv, &in) == 2) {
+                v = realloc(v, (n + 1) * sizeof *v);
+                memset(&v[n], 0, sizeof v[n]);
+                v[n].pid = pid;
+                v[n].dev = (dev_t)dv;
+                v[n].ino = (ino_t)in;
+                size_t l = strlen(exe);
+                if (l > 10 && !strcmp(exe + l - 10, " (deleted)")) exe[l - 10] = 0;
+                v[n].exe = exe;
+                exe = NULL;
+                v[n].rss = proc_rss(de->d_name);
+                n++;
+            }
+            free(cwd);
+            free(exe);
+            continue;
+        }
+        free(exe);
+        char *pfx = NULL;
+        if (proc_prefix(de->d_name, &st, &pfx) < 0) continue;
+        users = realloc(users, (nu + 1) * sizeof *users);
+        users[nu].pid = pid;
+        users[nu].dev = st.st_dev;
+        users[nu].ino = st.st_ino;
+        users[nu].pfx = pfx;
+        nu++;
+    }
+    closedir(d);
+    for (size_t u = 0; u < nu; u++) {
+        for (size_t i = 0; i < n; i++) {
+            if (v[i].dev != users[u].dev || v[i].ino != users[u].ino) continue;
+            char pid[24];
+            snprintf(pid, sizeof pid, "%ld", (long)users[u].pid);
+            if (users[u].pfx) services_load(users[u].pfx);
+            struct wproc w = { users[u].pid, proc_kind(pid), proc_rss(pid), NULL };
+            size_t len;
+            char *cmd = read_proc_file(pid, "cmdline", &len);
+            if (cmd && len) {
+                const char *b = strrchr(cmd, '\\');
+                if (!b) b = strrchr(cmd, '/');
+                w.name = lsiw_cli_strdup(b ? b + 1 : cmd);
+            } else w.name = lsiw_cli_strdup("?");
+            free(cmd);
+            if (w.kind != PROC_SYSTEM) v[i].programs++;
+            v[i].rss += w.rss;
+            v[i].procs = realloc(v[i].procs, (v[i].n + 1) * sizeof *v[i].procs);
+            v[i].procs[v[i].n++] = w;
+            if (!v[i].pfx) {
+                v[i].pfx = users[u].pfx;
+                users[u].pfx = NULL;
+                size_t l = strlen(v[i].pfx);
+                while (l > 1 && v[i].pfx[l - 1] == '/') v[i].pfx[--l] = 0;
+            }
+            break;
+        }
+        free(users[u].pfx);
+    }
+    free(users);
+    *out = v;
+    return n;
+}
+
+/* Running (a zombie is not: it has ended and waits for its parent). */
+static int pid_alive(pid_t pid)
+{
+    char path[64];
+    snprintf(path, sizeof path, "/proc/%ld/stat", (long)pid);
+    char *t = lsiw_read_text(path);
+    if (!t) return 0;
+    const char *e = strrchr(t, ')');
+    int alive = !(e && e[1] == ' ' && (e[2] == 'Z' || e[2] == 'X'));
+    free(t);
+    return alive;
+}
+
+/* Proton's fsync/esync memory of a prefix lives in /dev/shm until its
+ * wineserver removes it, which a killed wineserver never does. */
+static void remove_sync_shm(ino_t ino)
+{
+    static const char *const kinds[] = { "fsync", "esync", NULL };
+    for (int k = 0; kinds[k]; k++) {
+        char path[96];
+        snprintf(path, sizeof path, "/dev/shm/wine-%lx-%s", (unsigned long)ino, kinds[k]);
+        if (unlink(path) == 0) LSIW_TRACE("removed %s\n", path);
+    }
+}
+
+/* End the Wine of one prefix: its own processes first (the wineserver then
+ * exits by itself, cleanly), then the wineserver. With force, programs too. */
+static int stop_server(const struct wserver *s, int force)
+{
+    for (size_t k = 0; k < s->n; k++)
+        if (force || s->procs[k].kind == PROC_SYSTEM) {
+            kill(s->procs[k].pid, SIGTERM);
+            kill(s->procs[k].pid, SIGCONT);      /* a stopped one acts on it */
+        }
+    double t0 = now_mono();
+    while (pid_alive(s->pid) && now_mono() - t0 < 5.0) {
+        struct timespec ts = { 0, 100 * 1000 * 1000 };
+        nanosleep(&ts, NULL);
+    }
+    if (pid_alive(s->pid)) {
+        kill(s->pid, SIGTERM);
+        t0 = now_mono();
+        while (pid_alive(s->pid) && now_mono() - t0 < 3.0) {
+            struct timespec ts = { 0, 100 * 1000 * 1000 };
+            nanosleep(&ts, NULL);
+        }
+    }
+    int killed = 0;
+    if (pid_alive(s->pid)) {
+        for (size_t k = 0; k < s->n; k++)
+            if ((force || s->procs[k].kind == PROC_SYSTEM) && pid_alive(s->procs[k].pid))
+                kill(s->procs[k].pid, SIGKILL);
+        kill(s->pid, SIGKILL);
+        killed = 1;
+    }
+    for (int i = 0; i < 20 && pid_alive(s->pid); i++) {
+        struct timespec ts = { 0, 100 * 1000 * 1000 };
+        nanosleep(&ts, NULL);
+    }
+    if (killed && !pid_alive(s->pid)) remove_sync_shm(s->ino);
+    /* Without their wineserver Wine's processes can only hang. */
+    if (!pid_alive(s->pid))
+        for (size_t k = 0; k < s->n; k++)
+            if ((force || s->procs[k].kind == PROC_SYSTEM) && pid_alive(s->procs[k].pid))
+                kill(s->procs[k].pid, SIGKILL);
+    return pid_alive(s->pid) ? -1 : 0;
+}
+
+static char *size_text(unsigned long long b)
+{
+    if (b >= 1024ull * 1024 * 1024) return lsiw_cli_printf("%.1f GiB", b / (1024.0 * 1024 * 1024));
+    return lsiw_cli_printf("%.0f MiB", b / (1024.0 * 1024));
+}
+
+static char *server_name(const struct wserver *s)
+{
+    struct lsiw_runner *r = lsiw_server_runner(s->exe);
+    char *name = r ? lsiw_cli_strdup(r->name && *r->name ? r->name : r->id) : lsiw_cli_strdup(s->exe);
+    lsiw_runner_free(r);
+    return name;
+}
+
+int lsiw_wine_running(int verbose)
+{
+    struct wserver *v;
+    size_t n = wine_servers(&v);
+    if (!n) printf("No Wine or Proton is running.\n");
+    for (size_t i = 0; i < n; i++) {
+        char *name = server_name(&v[i]);
+        char *mem = size_text(v[i].rss);
+        char *what = v[i].programs ? lsiw_cli_printf("in use, %d process%s besides Wine's own and services", v[i].programs,
+                                                     v[i].programs == 1 ? "" : "es")
+                                   : lsiw_cli_strdup("idle, only Wine's own processes and services");
+        printf("%s, prefix %s: %s, %s\n", name, v[i].pfx ? v[i].pfx : "(unknown)", what, mem);
+        free(what);
+        if (verbose || v[i].programs) {
+            for (size_t k = 0; k < v[i].n; k++) {
+                char *m = size_text(v[i].procs[k].rss);
+                printf("  %7ld  %-8s %-28s %s\n", (long)v[i].procs[k].pid,
+                       v[i].procs[k].kind == PROC_SYSTEM ? "shared" : v[i].procs[k].kind == PROC_HELPER ? "helper"
+                                                                                                    : "program",
+                       v[i].procs[k].name, m);
+                free(m);
+            }
+        }
+        free(mem);
+        free(name);
+    }
+    wservers_free(v, n);
+    return 0;
+}
+
+/* Proton's sync memory of prefixes whose wineserver is gone (killed). */
+static void sweep_stale_shm(const struct wserver *v, size_t n)
+{
+    DIR *d = opendir("/dev/shm");
+    struct dirent *de;
+    uid_t me = getuid();
+    while (d && (de = readdir(d))) {
+        unsigned long ino;
+        char kind[8];
+        if (sscanf(de->d_name, "wine-%lx-%7[a-z]", &ino, kind) != 2) continue;
+        if (strcmp(kind, "fsync") && strcmp(kind, "esync")) continue;
+        char path[300];
+        snprintf(path, sizeof path, "/dev/shm/%s", de->d_name);
+        struct stat st;
+        if (lstat(path, &st) < 0 || !S_ISREG(st.st_mode) || st.st_uid != me) continue;
+        int used = 0;
+        for (size_t i = 0; i < n && !used; i++) used = (unsigned long)v[i].ino == ino;
+        if (!used && unlink(path) == 0) printf("removed %s (left by a wineserver that was killed)\n", path);
+    }
+    if (d) closedir(d);
+}
+
+int lsiw_wine_stop(int all, const char *only_pfx)
+{
+    struct stat want;
+    if (only_pfx && stat(only_pfx, &want) < 0) {
+        lsiw_log("%s: %s\n", only_pfx, strerror(errno));
+        return 1;
+    }
+    struct wserver *v;
+    size_t n = wine_servers(&v);
+    int rc = 0, any = 0;
+    for (size_t i = 0; i < n; i++) {
+        if (only_pfx && (v[i].dev != want.st_dev || v[i].ino != want.st_ino)) continue;
+        char *name = server_name(&v[i]);
+        if (v[i].programs && !all) {
+            printf("%s (%s) keeps running: programs use it (--all stops them too)\n", name,
+                   v[i].pfx ? v[i].pfx : "?");
+        } else {
+            any = 1;
+            int r = stop_server(&v[i], all);
+            printf("%s (%s): %s\n", name, v[i].pfx ? v[i].pfx : "?", r == 0 ? "stopped" : "could not be stopped");
+            if (r) rc = 1;
+        }
+        free(name);
+    }
+    if (!any && !rc) printf("No idle Wine or Proton was running.\n");
+    wservers_free(v, n);
+    if (!only_pfx) {
+        n = wine_servers(&v);
+        sweep_stale_shm(v, n);
+        wservers_free(v, n);
+    }
+    return rc;
+}
+
+/* After an instance: when the wineserver of prefix `pfx` is still there
+ * once Wine has had time to end it, and nothing but Wine's own processes
+ * use the prefix, end it. Runs detached, so lsiw itself exits at once. */
+static void wine_reap_later(const char *pfx)
+{
+    const char *off = getenv("LSIW_NO_REAP");
+    if (off && *off && strcmp(off, "0")) return;
+    struct stat st;
+    if (!pfx || stat(pfx, &st) < 0) return;
+    char *server = lsiw_prefix_server(pfx);
+    if (!server) return;                      /* the common case: Wine is gone */
+    free(server);
+    fflush(NULL);
+    pid_t c = fork();
+    if (c < 0) return;
+    if (c > 0) { waitpid(c, NULL, 0); return; }
+    setsid();
+    if (fork() != 0) _exit(0);
+    /* Hold nothing open: LSIW Control reads lsiw's output until every
+     * writer has closed it. */
+    int nul = open("/dev/null", O_RDWR);
+    if (nul >= 0) { dup2(nul, 0); dup2(nul, 1); dup2(nul, 2); if (nul > 2) close(nul); }
+    for (int fd = 3; fd < 1024; fd++) close(fd);
+    signal(SIGTERM, SIG_DFL);
+    signal(SIGHUP, SIG_IGN);
+    sigset_t none;
+    sigemptyset(&none);
+    sigprocmask(SIG_SETMASK, &none, NULL);
+    const char *g = getenv("LSIW_REAP_GRACE");      /* tests */
+    double grace = g && atof(g) > 0 ? atof(g) : 10.0;
+    double t0 = now_mono();
+    int idle = 0;
+    for (;;) {
+        struct timespec ts = { 1, 0 };
+        nanosleep(&ts, NULL);
+        struct wserver *v;
+        size_t n = wine_servers(&v);
+        struct wserver *s = NULL;
+        for (size_t i = 0; i < n && !s; i++)
+            if (v[i].dev == st.st_dev && v[i].ino == st.st_ino) s = &v[i];
+        if (!s || s->programs) {
+            /* Gone, or used again: whoever uses it ends it later. */
+            wservers_free(v, n);
+            _exit(0);
+        }
+        idle++;
+        if (now_mono() - t0 >= grace && idle >= 3) {
+            stop_server(s, 0);
+            wservers_free(v, n);
+            _exit(0);
+        }
+        wservers_free(v, n);
+        if (now_mono() - t0 > grace + 60) _exit(0);
+    }
+}
+
 int lsiw_exec_instance(const char *file, char **argv)
 {
     const char *off = getenv("LSIW_NO_INSTANCE");       /* tests, debugging: plain exec */
@@ -725,6 +1176,9 @@ int lsiw_exec_instance(const char *file, char **argv)
         execv(file, argv);
         return -1;
     }
+    /* The prefix: Wine's WINEPREFIX, or Proton's STEAM_COMPAT_DATA_PATH/pfx. */
+    const char *wp = getenv("WINEPREFIX"), *cd = getenv("STEAM_COMPAT_DATA_PATH");
+    char *pfx = wp && *wp ? lsiw_cli_strdup(wp) : cd && *cd ? lsiw_cli_printf("%s/pfx", cd) : NULL;
     char tag[64];
     struct timespec ts;
     clock_gettime(CLOCK_REALTIME, &ts);
@@ -781,6 +1235,7 @@ int lsiw_exec_instance(const char *file, char **argv)
         int sig = sigtimedwait(&set, &si, &tick);
         if (!child_done && waitpid(child, &status, WNOHANG) == child) child_done = 1;
         double t = now_mono();
+        services_load(pfx);
         if (!stops && t - last_tidy >= 2.0) {
             last_tidy = t;
             tidy_scope();
@@ -823,6 +1278,9 @@ int lsiw_exec_instance(const char *file, char **argv)
         }
     }
     sigprocmask(SIG_SETMASK, &old, NULL);
+    /* Wine of this prefix left behind with nothing to serve: end it. */
+    wine_reap_later(pfx);
+    free(pfx);
     int rc;
     if (ended && !stops) rc = 0;                     /* its own exit code is not known */
     else if (WIFEXITED(status)) rc = WEXITSTATUS(status);
@@ -1579,6 +2037,7 @@ int lsiw_steam_integrate(int add, int verbose)
             rc = -1;
         }
     }
+    if (add && !rc) lsiw_steam_migrate_default(verbose);
     if (verbose)
         printf("%s\n", add ? "Restart Steam, then pick an \"LSIW Proton\" tool under a game's Properties > "
                              "Compatibility (or in Settings > Compatibility for every game). Valve's Proton "
@@ -1768,8 +2227,10 @@ static int steam_is_running(void)
 
 /* Set the default tool of one Steam installation to `tool` and, with
  * existing, move every game that names one of Valve's Protons or another
- * tool with an LSIW twin to that twin. Returns 0, or -1. */
-static int steam_set_default_in(const char *root, const char *tool, int existing, int dry)
+ * tool with an LSIW twin to that twin. With only_if, the default changes
+ * only from that tool (nothing else is touched, nothing is printed).
+ * Returns 0 (1 with only_if when it changed), or -1. */
+static int steam_set_default_in(const char *root, const char *tool, int existing, int dry, const char *only_if)
 {
     char *path = lsiw_cli_printf("%s/config/config.vdf", root);
     char *tools = lsiw_cli_printf("%s/compatibilitytools.d", root);
@@ -1804,7 +2265,8 @@ static int steam_set_default_in(const char *root, const char *tool, int existing
                 char *want = NULL;
                 if (is_default) {
                     have_default = 1;
-                    if (strcmp(val->s, tool)) want = lsiw_cli_strdup(tool);
+                    if (strcmp(val->s, tool) && (!only_if || !strcmp(val->s, only_if)))
+                        want = lsiw_cli_strdup(tool);
                 } else if (existing && *val->s) {
                     want = twin_of(tools, val->s);
                     if (!want && strncmp(val->s, "LSIW-", 5)) {
@@ -1840,6 +2302,18 @@ static int steam_set_default_in(const char *root, const char *tool, int existing
     char *entry = lsiw_cli_printf("\t\"0\"\n\t\t\t\t\t{\n\t\t\t\t\t\t\"name\"\t\t\"%s\"\n\t\t\t\t\t\t\"config\"\t\t\"\"\n"
                                   "\t\t\t\t\t\t\"priority\"\t\t\"75\"\n\t\t\t\t\t}\n\t\t\t\t", q);
     free(q);
+    if (only_if) {
+        /* Migrating an old default: never add one the user does not have. */
+        free(entry);
+        vdf_free(v, n);
+        if (!e.n || dry) {
+            for (size_t i = 0; i < e.n; i++) free(e.v[i].text);
+            free(e.v);
+            rc = 0;
+            goto out;
+        }
+        goto write;
+    }
     if (!have_default) {
         if (map_close >= 0) vedit_add(&e, (size_t)map_close, (size_t)map_close, entry);
         else if (steam_close >= 0) {
@@ -1863,6 +2337,7 @@ static int steam_set_default_in(const char *root, const char *tool, int existing
         rc = 0;
         goto out;
     }
+write:;
     char *updated = vedit_apply(text, &e);
     time_t now = time(NULL);
     char stamp[32];
@@ -1873,8 +2348,8 @@ static int steam_set_default_in(const char *root, const char *tool, int existing
     } else if (lsiw_cli_write_file(path, updated, strlen(updated), 0644) < 0) {
         lsiw_log("cannot write %s: %s\n", path, strerror(errno));
     } else {
-        printf("  saved %s (the previous file is %s)\n", path, backup);
-        rc = 0;
+        if (!only_if) printf("  saved %s (the previous file is %s)\n", path, backup);
+        rc = only_if ? 1 : 0;
     }
     free(backup);
     free(updated);
@@ -1885,15 +2360,59 @@ out:
     return rc;
 }
 
+/* Steam's own default is Proton Experimental, so LSIW's is its twin. */
+#define DEFAULT_TOOL "LSIW-proton_experimental"
+/* What `lsiw steam default` made the default before 1.11. */
+#define OLD_DEFAULT_TOOL "LSIW-proton-stable"
+
+/* LSIW 1.10 and older made LSIW Proton Stable the default when no tool was
+ * named. Where Steam still has that default, and nobody chose it on
+ * purpose ([steam] default_tool_chosen), it becomes LSIW Proton
+ * Experimental, like Steam's own default. A default the user picked in
+ * Steam is something else and stays. Steam rewrites config.vdf when it
+ * exits, so this waits until Steam is not running. Returns 1 when done. */
+int lsiw_steam_migrate_default(int verbose)
+{
+    const char *cur = lsiw_setting_get("steam", "default_tool", NULL);
+    if (!cur || strcmp(cur, OLD_DEFAULT_TOOL) || truthy(lsiw_setting_get("steam", "default_tool_chosen", NULL)))
+        return 0;
+    if (steam_is_running()) {
+        if (verbose)
+            printf("Steam's default tool will change from LSIW Proton Stable to LSIW Proton Experimental "
+                   "once Steam is closed\n");
+        return 0;
+    }
+    char **roots = lsiw_steam_roots();
+    int failed = 0;
+    for (char **r = roots; r && *r; r++) {
+        if (lsiw_steam_root_sandboxed(*r)) continue;
+        char *dir = lsiw_cli_printf("%s/compatibilitytools.d/" DEFAULT_TOOL, *r);
+        int have = is_lsiw_tool(dir);
+        free(dir);
+        if (!have) continue;                 /* written by lsiw_steam_integrate first */
+        int rc = steam_set_default_in(*r, DEFAULT_TOOL, 0, 0, OLD_DEFAULT_TOOL);
+        if (rc < 0) failed = 1;
+        else if (rc > 0) {
+            printf("%s: Steam's default tool is now LSIW Proton Experimental (was LSIW Proton Stable, "
+                   "set by an older LSIW)\n", *r);
+        }
+    }
+    lsiw_strv_free(roots);
+    if (failed) return 0;
+    lsiw_setting_set("steam", "default_tool", DEFAULT_TOOL);
+    lsiw_config_save();
+    return 1;
+}
+
 static int steam_default(int argc, char **argv)
 {
-    const char *tool = "LSIW-proton-stable";
-    int existing = 0, dry = 0;
+    const char *tool = DEFAULT_TOOL;
+    int existing = 0, dry = 0, named = 0;
     for (int i = 2; i < argc; i++) {
         if (!strcmp(argv[i], "--all") || !strcmp(argv[i], "--existing")) existing = 1;
         else if (!strcmp(argv[i], "--dry-run") || !strcmp(argv[i], "-n")) dry = 1;
         else if (argv[i][0] == '-') { lsiw_log("unknown option '%s' (try 'lsiw steam --help')\n", argv[i]); return 2; }
-        else tool = argv[i];
+        else { tool = argv[i]; named = 1; }
     }
     if (!dry && steam_is_running()) {
         lsiw_log("Steam is running and would overwrite the change when it exits: quit Steam "
@@ -1911,11 +2430,13 @@ static int steam_default(int argc, char **argv)
         if (!is_lsiw_tool(dir) && strncmp(tool, "proton", 6))
             lsiw_log("warning: %s is not one of the LSIW tools in %s\n", tool, *r);
         free(dir);
-        if (steam_set_default_in(*r, tool, existing, dry) < 0) rc = 1;
+        if (steam_set_default_in(*r, tool, existing, dry, NULL) < 0) rc = 1;
     }
     lsiw_strv_free(roots);
     if (!rc && !dry) {
         lsiw_setting_set("steam", "default_tool", tool);
+        /* A tool named on purpose is the user's choice: never migrated. */
+        lsiw_setting_set("steam", "default_tool_chosen", named && strcmp(tool, DEFAULT_TOOL) ? "true" : NULL);
         lsiw_config_save();
         printf("Start Steam again. Every game without a tool of its own%s now runs with %s, in LSIW's "
                "shared prefix.\n", existing ? ", and every game that had Valve's Proton or a tool with an "
@@ -2020,8 +2541,9 @@ const char lsiw_help_steam[] =
     "  add           add or update the tools (restart Steam afterwards)\n"
     "  remove        remove them again\n"
     "  refresh       update the tools if the integration is on\n"
-    "  default       make an LSIW tool (LSIW Proton Stable unless TOOL names\n"
-    "                another, e.g. LSIW-proton_experimental) Steam's default for\n"
+    "  default       make an LSIW tool (LSIW Proton Experimental, like Steam's\n"
+    "                own default, unless TOOL names another, e.g.\n"
+    "                LSIW-proton-stable) Steam's default for\n"
     "                every game, including games added later; --all also moves\n"
     "                every game set to one of Valve's Protons, or to a tool with\n"
     "                an LSIW twin, to that twin. Steam must not be running; its\n"

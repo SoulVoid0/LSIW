@@ -132,12 +132,18 @@ prefix (rare, for example under `ProgramData`) stay in the old prefix.
 
 **Every game, new ones too:** `lsiw steam default --all` (Steam closed;
 LSIW Control: *Use for every game*) sets Steam's default compatibility tool
-(`CompatToolMapping` `"0"` in `config/config.vdf`) to LSIW Proton Stable,
-so every game without a tool of its own, including games installed later,
+(`CompatToolMapping` `"0"` in `config/config.vdf`) to LSIW Proton
+Experimental, the twin of Steam's own default (Proton Experimental); name
+another tool to pick it instead (`lsiw steam default LSIW-proton-stable`).
+Every game without a tool of its own, including games installed later,
 runs through LSIW. `--all` also moves every game set to one of Valve's
 Protons, or to another Proton that has an LSIW twin, to that twin. A copy
 of `config.vdf` is kept as `config.vdf.lsiw-backup-<date>`; `--dry-run`
-only shows what would change.
+only shows what would change. LSIW 1.10 and older made LSIW Proton Stable
+the default; where Steam still has that default and it was not named on
+purpose, `lsiw steam add` (also run whenever Proton versions change)
+switches it to LSIW Proton Experimental the next time Steam is closed. A
+default chosen in Steam's settings is left alone.
 
 **Mixing versions:** switching between Wine and Proton versions on the
 shared prefix makes the next start update the prefix (a few seconds). Two
@@ -294,6 +300,7 @@ the same version. The plain Proton versions stay in the list, unchanged.
 | `[steam] shared_prefix` | `true`, `false`: Steam games run in the shared prefix | `true` |
 | `[steam] own_prefix` | app IDs that keep their own prefix, comma-separated | |
 | `[steam] default_tool` | written by `lsiw steam default` | |
+| `[steam] default_tool_chosen` | `true` when `lsiw steam default TOOL` named a tool other than LSIW Proton Experimental (never migrated) | |
 | `[engine] wine` | version ID, `wine` path or command | `wine` from `$PATH` |
 | `[engine] proton` | version ID or Proton folder | newest official Proton |
 | `[wine] custom` | `;`-separated `wine` paths | |

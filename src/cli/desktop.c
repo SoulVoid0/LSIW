@@ -29,8 +29,10 @@
  *    programs run as before.
  * Wine's shared processes (wineserver, services.exe, explorer.exe ...) are
  * started by whichever program comes first; lsiw_cli_scope_tidy() moves
- * them into a scope of their own, so a program's entry ends with the
- * program, not with the last program of the prefix.
+ * them into a scope of their own, app-lsiw-lsiw_wine-<random>.scope with
+ * the hidden desktop entry lsiw_wine.desktop ("Wine services (LSIW)"), so a
+ * program's entry ends with the program, not with the last program of the
+ * prefix, and System Monitor still shows what Wine itself takes.
  *
  * LSIW_NO_IDENTITY=1 turns all of this off.
  *
@@ -53,6 +55,8 @@
 
 #define DESKTOP_VAR "LSIW_DESKTOP_ID"
 #define APPID_VAR   "LSIW_STEAM_APPID"
+/* Desktop entry of Wine's shared processes: no program ID has "_". */
+#define WINE_DESKTOP_ID "lsiw_wine"
 
 static int off(const char *name)
 {
@@ -401,8 +405,26 @@ int lsiw_cli_scope_procs(pid_t **out)
 int lsiw_cli_scope_release(const pid_t *pids, int n)
 {
     if (!g_scope || n < 1) return 0;
+    /* An application scope with a desktop entry of its own, so System
+     * Monitor lists Wine's shared processes (and their memory) as "Wine
+     * services (LSIW)" instead of leaving them out of its Applications. */
+    char *apps = applications_dir();
+    char *file = lsiw_cli_printf("%s/" WINE_DESKTOP_ID ".desktop", apps);
+    char *self = lsiw_cli_self_path();
+    char *qs = exec_quote(self ? self : "lsiw");
+    char *text = lsiw_cli_printf(
+        "[Desktop Entry]\n"
+        "Type=Application\n"
+        "Name=Wine services (LSIW)\n"
+        "Comment=Wine's processes shared by the programs of a prefix; they end with the last program\n"
+        "Exec=%s prefix stop\n"
+        "Icon=lsiw\n"
+        "Terminal=false\n"
+        "NoDisplay=true\n", qs);
+    if (write_if_changed(file, text) < 0) LSIW_TRACE("cannot write %s: %s\n", file, strerror(errno));
+    free(text); free(qs); free(self); free(file); free(apps);
     char *rnd = random_part();
-    char *unit = lsiw_cli_printf("lsiw-wine-%s.scope", rnd);
+    char *unit = lsiw_cli_printf("app-lsiw-" WINE_DESKTOP_ID "-%s.scope", rnd);
     int r = start_scope(unit, "Wine services shared by LSIW programs", pids, n);
     if (r == 0) LSIW_TRACE("Wine's shared processes moved to %s\n", unit);
     free(unit);
